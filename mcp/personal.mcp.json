@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "gmail": { "type": "http", "url": "${GMAIL_MCP_URL}", "headers": { "Authorization": "Bearer ${GMAIL_PERSONAL_TOKEN}" } },
+    "ofw": { "type": "http", "url": "${OFW_MCP_URL}", "headers": { "Authorization": "Bearer ${OFW_MCP_TOKEN}" } }
+  }
+}

@@ -1,0 +1,9 @@
+pyyaml
+python-dotenv
+httpx
+mcp
+apscheduler
+slack-bolt
+python-telegram-bot
+fastapi
+uvicorn

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+env/*.env
+!env/*.env.example
+.pytest_cache/
+windows_client/build/
+windows_client/dist/
+*.spec.bak
+.DS_Store

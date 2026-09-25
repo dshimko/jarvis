@@ -1,0 +1,10 @@
+pystray
+pillow
+pynput
+sounddevice
+soundfile
+numpy
+httpx
+pyyaml
+pyttsx3
+win11toast

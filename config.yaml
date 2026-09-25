@@ -1,0 +1,67 @@
+# Jarvis runtime config. Secrets live in env/<mode>.env, never here.
+api:
+  port: 8765              # the API always binds 127.0.0.1; only the port is configurable
+
+jev:
+  enabled: true
+  model: jev-latest
+  # Jev is advisory. Code owns every threshold and every side effect.
+  mode_confidence_min: 0.85
+  agent_confidence_min: 0.70
+  leak_block_threshold: 0.30      # P(payload contains other-mode content) above this blocks a send
+  hostility_confirm_threshold: 0.40  # personal/OFW: above this forces a second spoken confirmation
+
+modes:
+  work:
+    vault: ${WIN_HOME}/Vaults/Jarvis-Work
+    env_file: env/work.env
+    channels: [slack_work, voice]
+    daily_write_cap: 20
+    agents: [triage, scribe, researcher, comms, builder, reviewer]
+    # Fill exact names after `claude mcp list` + a tool listing in each vault.
+    read_tools:
+      - mcp__slack__search_messages
+      - mcp__slack__read_channel
+      - mcp__gmail__search
+      - mcp__gmail__read_message
+      - mcp__atlassian__search
+      - mcp__clickup__get_tasks
+    write_tools:            # never allowed in headless sessions, executor only
+      - mcp__slack__post_message
+      - mcp__gmail__send_message
+    repos:
+      pulse: ~/code/pulse
+      ofw-mcp: ~/code/ofw-mcp
+      docketsense: ~/code/docketsense
+  personal:
+    vault: ${WIN_HOME}/Vaults/Jarvis-Personal
+    env_file: env/personal.env
+    channels: [telegram, voice]
+    daily_write_cap: 5
+    agents: [triage, scribe, comms, coparent, reviewer]
+    read_tools:
+      - mcp__gmail__search
+      - mcp__gmail__read_message
+      - mcp__ofw__list_messages
+      - mcp__ofw__read_message
+      - mcp__ofw__list_events
+      - mcp__ofw__list_expenses
+      - mcp__ofw__list_journal
+    write_tools:
+      - mcp__gmail__send_message
+      - mcp__ofw__send_message
+      - mcp__ofw__create_journal_entry
+    repos: {}
+
+# Vault tool scoping (Read/Edit on the own vault, denies for everything else) is built in jarvis/brain.py.
+
+outbox:
+  max_age_hours: 24
+
+schedule:
+  work:
+    morning-brief: "07:30"
+    end-of-day: "18:00"
+  personal:
+    evening-review: "21:00"
+    ofw-check: "12:00"

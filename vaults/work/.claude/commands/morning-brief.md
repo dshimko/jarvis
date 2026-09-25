@@ -1,0 +1,1 @@
+Use researcher to scan Slack and email since the last daily note, then triage. Use scribe to write today's daily note: top 3 priorities, meetings, open loops older than 3 days, pending outbox items. Finish with a spoken summary under 60 words.

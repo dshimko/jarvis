@@ -1,0 +1,1 @@
+Use coparent to check OFW for new messages, events, and expenses since the last check. Update timeline and open items. If a response is expected, draft a BIFF reply into outbox/ and ask reviewer to review it. Spoken summary under 40 words.

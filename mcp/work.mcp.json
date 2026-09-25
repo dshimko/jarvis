@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "slack": { "type": "http", "url": "${SLACK_MCP_URL}", "headers": { "Authorization": "Bearer ${SLACK_WORK_TOKEN}" } },
+    "gmail": { "type": "http", "url": "${GMAIL_MCP_URL}", "headers": { "Authorization": "Bearer ${GMAIL_WORK_TOKEN}" } },
+    "atlassian": { "type": "http", "url": "https://mcp.atlassian.com/v1/mcp" },
+    "clickup": { "type": "http", "url": "https://mcp.clickup.com/mcp" }
+  }
+}
