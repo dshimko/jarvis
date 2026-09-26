@@ -44,8 +44,9 @@ troubleshooting) continue in [`infra/RUNBOOK-ops.md`](RUNBOOK-ops.md).
 7. **AWS CLI profiles.** Four named profiles, set up as this runbook reaches the step that needs
    them:
    - `sparko` -- the existing management-account access (IAM user `Administrator`, account
-     `080109295043`, organization `o-lcwqey40mr`, Identity Center in `us-east-1`). Used only for
-     `infra/org/`.
+     `080109295043`, organization `o-lcwqey40mr`, Identity Center in `us-east-1`). Used only to
+     plan and apply, and later destroy, `infra/org/` (AD36) -- never against `bootstrap/` or
+     `envs/prod`.
    - `jarvis-prod` -- IAM Identity Center, `JarvisAdmin` permission set, account `jarvis-prod`.
      Used only for `terraform apply` in `bootstrap/` and `envs/prod`.
    - `jarvis-operator` -- IAM Identity Center, `JarvisOperator` permission set. Used for every
@@ -71,39 +72,53 @@ troubleshooting) continue in [`infra/RUNBOOK-ops.md`](RUNBOOK-ops.md).
 
 Nothing here runs `terraform apply`. Every `plan`/`plan-org`/`plan-bootstrap` target stops at
 `plan.out`/`plan.txt` for review; you apply by hand with
-`AWS_PROFILE=<profile> terraform -chdir=infra/<root> apply plan.out`.
+`AWS_PROFILE=<profile> terraform -chdir=infra/<root> apply plan.out`. These `make` targets need no
+`--region` flag -- the Makefile exports `AWS_REGION ?= us-east-1` to every script it calls;
+override with `AWS_REGION=<region> make ...` if you ever target a different region. Commands typed
+directly against `aws` (not through `make`), below and in `infra/RUNBOOK-ops.md`, keep an explicit
+`--region us-east-1`.
 
 ### 2.1 `org/` (management account, profile `sparko`)
 
-1. Create a state bucket for `org/` in the **management account** yourself (`org/` does not
-   create it; `infra/org/backend.hcl.example` names it `MANAGEMENT_STATE_BUCKET`). Copy the
-   example and fill it in:
-   ```
-   cp infra/org/backend.hcl.example infra/org/backend.hcl
-   ```
-   Edit `bucket` in `infra/org/backend.hcl` to that bucket's name.
-2. Create `infra/org/org.auto.tfvars` (gitignored, no example file ships -- there are no secret
+`org/` keeps local Terraform state (`infra/org/terraform.tfstate` and its `.backup`, gitignored) --
+there is no `backend.hcl` and no state bucket in the management account (AD36). This state file is
+the only record of the `jarvis` OU and the `jarvis-prod` account, so back it up somewhere outside
+the repo (your password manager's file storage, or an encrypted volume) after every apply. If it
+is lost, both must be imported by hand before this root can manage or destroy them.
+
+1. Create `infra/org/org.auto.tfvars` (gitignored, no example file ships -- there are no secret
    values in it, just this account's identifiers):
    ```
    account_email            = "<root email for the new jarvis-prod account>"
    attach_region_scp        = false
-   attach_guardrail_scp     = false
+   attach_guardrail_scp     = true
    create_permission_sets   = false
    ```
-3. Plan and review:
+2. Plan and review:
    ```
    make plan-org
    ```
-   Expected: `Review infra/org/plan.txt. The human applies; this target never does.` Read
-   `infra/org/plan.txt`. It creates the `jarvis-prod` account and attaches only
-   `jarvis-org-guard` (always on; the region-deny and guardrail SCPs default off, AD27/AD28).
-4. Apply by hand:
+   Expected: `Review infra/org/plan.txt. The human applies; this target never does.`, and,
+   at the end of `infra/org/plan.txt`, `Plan: 7 to add, 0 to change, 0 to destroy.` Read the full
+   plan: it creates an OU named `jarvis` under the organization root, the `jarvis-prod` account
+   inside that OU, and attaches `jarvis-org-guard` and `jarvis-guardrail` to the OU (the
+   region-deny SCP defaults off, AD27/AD28).
+
+   **Before applying, and on every later `org/` plan:** check the entry for
+   `aws_organizations_account.jarvis_prod`. It must say `will be created` (first apply) or nothing
+   at all (no change) -- never `must be replaced`. `infra/org/main.tf` sets
+   `close_on_deletion = true`, so a forced replacement would destroy the real account (AWS's
+   90-day recovery window applies) before creating a new one in its place.
+3. Apply by hand:
    ```
    AWS_PROFILE=sparko terraform -chdir=infra/org apply plan.out
    ```
-5. Record the new account id:
+4. Record the new account id and the OU id:
    ```
    AWS_PROFILE=sparko terraform -chdir=infra/org output -raw account_id
+   ```
+   ```
+   AWS_PROFILE=sparko terraform -chdir=infra/org output -raw ou_id
    ```
 
 **Region-deny SCP warning (DESIGN.md 11.1, AD28).** Region-deny SCPs have broken real AWS
@@ -261,14 +276,14 @@ The JSON below shows the shape only; the values are placeholders.
    ```
 2. Upload it from the clipboard (macOS):
    ```
-   pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/work --secret-string file:///dev/stdin --region us-east-2
+   pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/work --secret-string file:///dev/stdin --region us-east-1
    ```
    On Windows, run it from WSL (where `/dev/stdin` exists), with the Windows clipboard as the
    source. Native PowerShell is not supported for this step: the AWS CLI cannot read a blob
    parameter from stdin on Windows, and `(Get-Clipboard)` in argv would expose the value to
    other processes.
    ```
-   powershell.exe -NoProfile -Command Get-Clipboard | tr -d '\r' | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/work --secret-string file:///dev/stdin --region us-east-2
+   powershell.exe -NoProfile -Command Get-Clipboard | tr -d '\r' | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/work --secret-string file:///dev/stdin --region us-east-1
    ```
    Clear the Windows clipboard afterwards, from WSL:
    ```
@@ -291,7 +306,7 @@ The JSON below shows the shape only; the values are placeholders.
    ```
 6. Upload it from the clipboard:
    ```
-   pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-2
+   pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-1
    ```
    Expected: a JSON response with `"Name": "jarvis/tailscale"` and a new `"VersionId"`. Then clear
    the clipboard (`pbcopy </dev/null`).
@@ -300,7 +315,7 @@ The JSON below shows the shape only; the values are placeholders.
    tmpfs file, consumed by `tailscale up`, and shredded (`ops/aws/lib/tailscale-join.sh`). You may
    empty this secret afterward:
    ```
-   aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string '{}' --region us-east-2 --profile jarvis-operator
+   aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string '{}' --region us-east-1 --profile jarvis-operator
    ```
    Nothing on the box reads it again outside a manual key rotation (section 7 in
    RUNBOOK-ops.md).

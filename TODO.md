@@ -3,6 +3,28 @@
 Findings left unfixed after a review gate (MEDIUM and below), with a file reference and a
 one-line fix direction. Remove an entry when it is done.
 
+## From the re-targeting gate (us-east-1, OU, local state; 2026-09-25)
+
+- [ ] MEDIUM `infra/org/README.md` and `infra/RUNBOOK-ops.md` section 10: a closed account stays
+  in its OU as SUSPENDED for 90 days, so `terraform destroy` closes the account and then fails to
+  delete the OU. Direction: document a second destroy after the account leaves the OU, and state
+  that closure is permanent after 90 days and the email cannot be reused.
+- [ ] MEDIUM `infra/tests/*.tftest.hcl`, `infra/tests/modules/policy_check/variables.tf`: the
+  expected region is a fixed default, so a hardcoded region in a module would still pass.
+  Direction: add one run with `aws_region = "eu-west-1"` passed through to `policy_check`.
+- [ ] MEDIUM `ops/aws/bin/jarvis-secrets` `region()`: no unit test for env-wins, file fallback,
+  and both-empty-raises. Direction: tests in `tests/test_ops_aws_tools.py` with an overridable
+  region file path.
+- [ ] MEDIUM `windows_client/jarvis_client/__main__.py`: no test that `cfg.aws_region` reaches
+  both token sources. Direction: extend the token-source test with a non-default region.
+- [ ] LOW `windows_client/install.ps1`: `aws_region` written unquoted; `config.py` does not
+  validate it (empty value becomes `None` in argv). Direction: `Format-YamlScalar` plus a
+  non-empty-string fallback to the default.
+- [ ] LOW `windows_client/install.ps1` `.PARAMETER AwsRegion` help text claims the script calls
+  AWS; it only writes `client.yaml`. Direction: reword.
+- [ ] LOW `ops/aws/ssm/jarvis-deploy.sh:38` still reads `JARVIS_REGION` from `instance.env`
+  before the region file, while `jarvis-secrets` reads only the file. Direction: one source.
+
 ## From Gate 5 (docs review, 2026-09-25)
 
 - [ ] LOW `infra/org/policies.tf` JarvisOperator: add read-only `logs:FilterLogEvents` and `logs:GetLogEvents` on the `/jarvis/*` log groups so the operator can run the log checks in the runbook without the admin profile.

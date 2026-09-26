@@ -15,14 +15,14 @@ call this repo has no wrapper script for).
    to `jarvis/tailscale` from stdin (never a heredoc, argv, or a file in the repo; DESIGN.md
    section 5):
    ```
-   pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-2
+   pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-1
    ```
    On Windows, run it from WSL (where `/dev/stdin` exists), with the Windows clipboard as the
    source. Native PowerShell is not supported for this step: the AWS CLI cannot read a blob
    parameter from stdin on Windows, and `(Get-Clipboard)` in argv would expose the value to
    other processes.
    ```
-   powershell.exe -NoProfile -Command Get-Clipboard | tr -d '\r' | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-2
+   powershell.exe -NoProfile -Command Get-Clipboard | tr -d '\r' | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-1
    ```
    Clear the Windows clipboard afterwards, from WSL:
    ```
@@ -36,7 +36,7 @@ call this repo has no wrapper script for).
 3. Open a root shell on the box (`ssm:StartSession` on `AWS-StartInteractiveCommand`, same
    document class `oauth-login.sh`/`sync-agents.sh` use):
    ```
-   aws ssm start-session --target <instance-id> --region us-east-2 --profile jarvis-operator
+   aws ssm start-session --target <instance-id> --region us-east-1 --profile jarvis-operator
    ```
 4. In that session, repeat the tmpfs handling from `ops/aws/lib/tailscale-join.sh` by hand, with
    `--force-reauth` added (DESIGN.md section 5 rotation table):
@@ -44,7 +44,7 @@ call this repo has no wrapper script for).
    sudo install -d -m 0700 -o root -g root /run/jarvis
    ```
    ```
-   sudo sh -c 'aws secretsmanager get-secret-value --secret-id jarvis/tailscale --region us-east-2 --query SecretString --output text | jq -r .authkey > /run/jarvis/ts-authkey'
+   sudo sh -c 'aws secretsmanager get-secret-value --secret-id jarvis/tailscale --region us-east-1 --query SecretString --output text | jq -r .authkey > /run/jarvis/ts-authkey'
    ```
    ```
    sudo tailscale up --force-reauth --auth-key=file:/run/jarvis/ts-authkey \
@@ -75,14 +75,14 @@ manually (tray menu, or log off/on).
 
 Copy the full new JSON for the secret to the clipboard (shapes in RUNBOOK.md section 3), then:
 ```
-pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/<name> --secret-string file:///dev/stdin --region us-east-2
+pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/<name> --secret-string file:///dev/stdin --region us-east-1
 ```
 On Windows, run it from WSL (where `/dev/stdin` exists), with the Windows clipboard as the
 source. Native PowerShell is not supported for this step: the AWS CLI cannot read a blob
 parameter from stdin on Windows, and `(Get-Clipboard)` in argv would expose the value to
 other processes.
 ```
-powershell.exe -NoProfile -Command Get-Clipboard | tr -d '\r' | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/<name> --secret-string file:///dev/stdin --region us-east-2
+powershell.exe -NoProfile -Command Get-Clipboard | tr -d '\r' | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/<name> --secret-string file:///dev/stdin --region us-east-1
 ```
 Clear the Windows clipboard afterwards, from WSL:
 ```
@@ -122,47 +122,47 @@ AWS CLI generic from here (no repo script) -- run under `AWS_PROFILE=jarvis-prod
 1. Find the recovery point:
    ```
    aws backup list-recovery-points-by-backup-vault --backup-vault-name jarvis-backup \
-     --region us-east-2 --profile jarvis-prod
+     --region us-east-1 --profile jarvis-prod
    ```
 2. Get a restore metadata template and edit it (availability zone, KMS key) as needed:
    ```
    aws backup get-recovery-point-restore-metadata --backup-vault-name jarvis-backup \
-     --recovery-point-arn <arn> --region us-east-2 --profile jarvis-prod
+     --recovery-point-arn <arn> --region us-east-1 --profile jarvis-prod
    ```
 3. Start the restore (creates a **new** EBS volume, does not touch the running instance):
    ```
    aws backup start-restore-job --recovery-point-arn <arn> \
      --iam-role-arn arn:aws:iam::<account-id>:role/jarvis-backup \
      --metadata file://restore-metadata.json --resource-type EBS \
-     --region us-east-2 --profile jarvis-prod
+     --region us-east-1 --profile jarvis-prod
    ```
-   Poll `aws backup describe-restore-job --restore-job-id <id> --region us-east-2 --profile
+   Poll `aws backup describe-restore-job --restore-job-id <id> --region us-east-1 --profile
    jarvis-prod` until `Status: COMPLETED`; note the new `CreatedResourceArn` (a volume id).
 4. Stop the instance, swap the root volume, restart it:
    ```
-   aws ec2 stop-instances --instance-ids <instance-id> --region us-east-2 --profile jarvis-prod
+   aws ec2 stop-instances --instance-ids <instance-id> --region us-east-1 --profile jarvis-prod
    ```
    ```
-   aws ec2 wait instance-stopped --instance-ids <instance-id> --region us-east-2 --profile jarvis-prod
+   aws ec2 wait instance-stopped --instance-ids <instance-id> --region us-east-1 --profile jarvis-prod
    ```
    ```
-   aws ec2 detach-volume --volume-id <old-volume-id> --region us-east-2 --profile jarvis-prod
+   aws ec2 detach-volume --volume-id <old-volume-id> --region us-east-1 --profile jarvis-prod
    ```
    (the old volume is not deleted -- `delete_on_termination = false` -- keep it until the restore
    is confirmed good)
    ```
    aws ec2 attach-volume --volume-id <new-volume-id> --instance-id <instance-id> \
-     --device /dev/sda1 --region us-east-2 --profile jarvis-prod
+     --device /dev/sda1 --region us-east-1 --profile jarvis-prod
    ```
    ```
-   aws ec2 start-instances --instance-ids <instance-id> --region us-east-2 --profile jarvis-prod
+   aws ec2 start-instances --instance-ids <instance-id> --region us-east-1 --profile jarvis-prod
    ```
 5. Verify, back under `jarvis-operator`:
    ```
    make status
    ```
    ```
-   aws ssm start-session --target <instance-id> --region us-east-2 --profile jarvis-operator \
+   aws ssm start-session --target <instance-id> --region us-east-1 --profile jarvis-operator \
      --document-name AWS-StartInteractiveCommand --parameters command="sudo /opt/jarvis/bin/jarvis-status --assert"
    ```
    Expected, last line: `post-boot-assert: all checks passed`.
@@ -176,7 +176,7 @@ This drill proves it either way.
 
 1. Stop the daemon on purpose:
    ```
-   aws ssm start-session --target <instance-id> --region us-east-2 --profile jarvis-operator \
+   aws ssm start-session --target <instance-id> --region us-east-1 --profile jarvis-operator \
      --document-name AWS-StartInteractiveCommand --parameters command="sudo systemctl stop jarvis@work"
    ```
 2. Wait. `jarvis-heartbeat-work` alarms after 3 missing 300 s periods (up to 15 minutes),
@@ -205,25 +205,25 @@ The instance has `disable_api_termination = true` and its root volume has
 destroy. AWS CLI generic, under `AWS_PROFILE=jarvis-prod`:
 ```
 aws ec2 modify-instance-attribute --instance-id <instance-id> --no-disable-api-termination \
-  --region us-east-2 --profile jarvis-prod
+  --region us-east-1 --profile jarvis-prod
 ```
 Empty the artifacts bucket (no `force_destroy`; every object version must go, AWS CLI generic):
 ```
 aws s3api list-object-versions --bucket jarvis-artifacts-<account-id> --output json \
-  --profile jarvis-prod --region us-east-2 \
+  --profile jarvis-prod --region us-east-1 \
   | jq '{Objects: [(.Versions // [])[], (.DeleteMarkers // [])[] | {Key, VersionId}], Quiet: true}' \
   | aws s3api delete-objects --bucket jarvis-artifacts-<account-id> --delete file:///dev/stdin \
-      --profile jarvis-prod --region us-east-2
+      --profile jarvis-prod --region us-east-1
 ```
 **Required:** delete every recovery point in the `jarvis-backup` vault. The vault has no
 `force_destroy` (`infra/modules/backup/main.tf`), and AWS refuses to delete a vault that still
 holds recovery points, so `destroy` fails without this step. AWS CLI generic:
 ```
-aws backup list-recovery-points-by-backup-vault --backup-vault-name jarvis-backup --query 'RecoveryPoints[].RecoveryPointArn' --output text --profile jarvis-prod --region us-east-2
+aws backup list-recovery-points-by-backup-vault --backup-vault-name jarvis-backup --query 'RecoveryPoints[].RecoveryPointArn' --output text --profile jarvis-prod --region us-east-1
 ```
-Expected: one or more `arn:aws:ec2:us-east-2::snapshot/snap-...` ARNs. For each ARN:
+Expected: one or more `arn:aws:ec2:us-east-1::snapshot/snap-...` ARNs. For each ARN:
 ```
-aws backup delete-recovery-point --backup-vault-name jarvis-backup --recovery-point-arn <arn> --profile jarvis-prod --region us-east-2
+aws backup delete-recovery-point --backup-vault-name jarvis-backup --recovery-point-arn <arn> --profile jarvis-prod --region us-east-1
 ```
 Expected: no output. Re-run the list command until it prints nothing. Then:
 ```
@@ -251,21 +251,34 @@ AWS_PROFILE=jarvis-prod terraform -chdir=infra/bootstrap destroy
 
 ### 10.3 `org/`
 
-Set `attach_region_scp = false` and `attach_guardrail_scp = false` in
-`infra/org/org.auto.tfvars` if either was ever turned on, then `make plan-org` and apply -- this
-cleanly detaches those two SCPs. `jarvis-org-guard` stays attached unconditionally (it is not
-gated by a variable in `infra/org/main.tf`); it stops applying only once the account is removed
-from the organization.
+Run this only after `envs/prod` (10.1) and `bootstrap/` (10.2) are fully destroyed -- `org/` is
+always the last root torn down:
+```
+AWS_PROFILE=sparko terraform -chdir=infra/org destroy
+```
+One `destroy` does the whole thing (AD35): it detaches every SCP (`jarvis-org-guard`, and
+`jarvis-guardrail`/`jarvis-region-deny` if either was ever attached) from the `jarvis` OU, closes
+the `jarvis-prod` account (`close_on_deletion = true`, `infra/org/main.tf`), and deletes the OU.
+SCP detachment is not a separate step -- `terraform destroy` removes all of `org/`'s resources
+together, in dependency order, so the attachments go before the OU and the account.
 
-`aws_organizations_account.jarvis_prod` has `lifecycle { prevent_destroy = true }` and
-`close_on_deletion = false`: a plain `terraform destroy` will refuse, and even after removing that
-block, destroying the *resource* only detaches it from Terraform state -- it does **not** close
-the real AWS account. Closure is a separate, manual, AWS CLI generic step:
+**Closure is irreversible after 90 days.** AWS keeps a closed account recoverable for 90 days;
+until then it sits in `SUSPENDED` state, reachable only through AWS Support, and nothing inside it
+is usable. After 90 days the closure is permanent and the account cannot be recovered. While
+`SUSPENDED`, the account's root email address is still attached to it and cannot be reused to
+create a new AWS account -- only once the 90 days pass and closure is permanent does that email
+become reusable.
+
+**Run `destroy` a second time to finish.** AWS keeps a closing account attached to its OU while it
+is `SUSPENDED`, so the first `destroy` above closes the account but then fails to delete the
+now-non-empty `jarvis` OU. After the account has left the OU (on its own, or by moving it out by
+hand), run the same command again:
 ```
-aws organizations close-account --account-id <account-id> --profile sparko
+AWS_PROFILE=sparko terraform -chdir=infra/org destroy
 ```
-Only do this once you are certain `envs/prod` and `bootstrap/` are fully torn down -- account
-closure is not reversible for 90 days and nothing inside a closed account is reachable.
+This second `destroy` deletes the (now empty) OU and finishes the teardown. Only start this whole
+section once you are certain `envs/prod` and `bootstrap/` are fully torn down first -- account
+closure cannot be undone.
 
 ### 10.4 Tailscale and Syncthing on the workstation
 
@@ -283,7 +296,7 @@ Brief section 10, items 1 to 6, plus the TODO.md `VERIFY` item and the alarm-dri
 noted in section 9.
 
 - [ ] **1. Both services survive a reboot with no manual steps.** Reboot the instance
-  (`aws ec2 reboot-instances --instance-ids <id> --region us-east-2 --profile jarvis-prod`, AWS
+  (`aws ec2 reboot-instances --instance-ids <id> --region us-east-1 --profile jarvis-prod`, AWS
   CLI generic), wait, then `make status` shows `jarvis@work.service: active` and
   `jarvis@personal.service: active` with no SSM shell or manual restart in between.
 - [ ] **2. Ctrl+Alt+W / Ctrl+Alt+P reach the daemons over Tailscale.** From the Windows tray with
@@ -305,10 +318,10 @@ noted in section 9.
   first deploy. These use `jarvis-prod` because the `JarvisOperator` permission set
   (`infra/org/policies.tf`) grants no CloudWatch Logs read:
   ```
-  aws logs filter-log-events --log-group-name /jarvis/work --filter-pattern '{ $.event = "token_publish_failed" }' --region us-east-2 --profile jarvis-prod
+  aws logs filter-log-events --log-group-name /jarvis/work --filter-pattern '{ $.event = "token_publish_failed" }' --region us-east-1 --profile jarvis-prod
   ```
   ```
-  aws logs filter-log-events --log-group-name /jarvis/personal --filter-pattern '{ $.event = "token_publish_failed" }' --region us-east-2 --profile jarvis-prod
+  aws logs filter-log-events --log-group-name /jarvis/personal --filter-pattern '{ $.event = "token_publish_failed" }' --region us-east-1 --profile jarvis-prod
   ```
   (AWS CLI generic.) Expected: no events. If either appears, the `EncryptApiTokens` KMS grant
   (`kms:GenerateDataKey`, `kms:Decrypt`, DESIGN-IAM.md 3.2, Phase 2 amendment K1) is still too
@@ -363,7 +376,7 @@ switch, both daemons back on `<prev>` and healthy) or `rollback_health_check_fai
 way `releases/DEPLOYED` was **not** updated (only a passing `make deploy` writes it), so the next
 plain `make deploy SHA=<same-or-newer>` retries cleanly. Investigate on the box first:
 ```
-aws ssm start-session --target <instance-id> --region us-east-2 --profile jarvis-operator \
+aws ssm start-session --target <instance-id> --region us-east-1 --profile jarvis-operator \
   --document-name AWS-StartInteractiveCommand --parameters command="sudo journalctl -u jarvis@work -u jarvis@personal --since -10min --no-pager"
 ```
 and check `/jarvis/cloud-init` (first boot) or `/jarvis/work` / `/jarvis/personal` (later deploys)

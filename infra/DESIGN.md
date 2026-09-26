@@ -1,12 +1,14 @@
 # Jarvis on AWS: design
 
+Re-targeted 2026-09-25 (PLAN.md AD34 to AD36).
+
 Phase 1 deliverable. It is a design only; there is no code here. Inputs: `infra/PLAN.md` (AD1 to
 AD21, and AD22 to AD30 in PLAN 3.1, which answer this design's first-round questions),
 `infra/BRIEF.md`, `README.md`, `PORTING.md`, `jarvis/{modes,api,brain}.py`.
 Where this file tightens the plan it says "(tighter)". Disagreements are listed in section 13.
 
 Notation. `ACCT` is the `jarvis-prod` account id (created by `org/`). The management account
-is `080109295043`, organization `o-lcwqey40mr`, profile `sparko` (confirmed read-only). Region is `var.aws_region`, default `us-east-2`,
+is `080109295043`, organization `o-lcwqey40mr`, profile `sparko` (confirmed read-only). Region is `var.aws_region`, default `us-east-1`,
 and it is written literally below. `<secret:jarvis/work>`, `<key:jarvis>`, `<role:jarvis-instance>`
 and similar are exact ARNs that Terraform resolves from resource attributes. They are never
 wildcards. Every resource carries `app=jarvis`, `env=prod`, `owner=dushan` (AD20).
@@ -28,7 +30,7 @@ wildcards. Every resource carries `app=jarvis`, `env=prod`, `owner=dushan` (AD20
 | Resource | Name | Purpose |
 |---|---|---|
 | `aws_vpc` | `jarvis-vpc` | `10.60.0.0/24`, DNS support and hostnames on, no IPv6 |
-| `aws_subnet` | `jarvis-public-a` | `10.60.0.0/26` in `us-east-2a` (variable), `map_public_ip_on_launch = false` |
+| `aws_subnet` | `jarvis-public-a` | `10.60.0.0/26` in `us-east-1a` (variable), `map_public_ip_on_launch = false` |
 | `aws_internet_gateway` | `jarvis-igw` | Egress path, no NAT gateway |
 | `aws_route_table` + association | `jarvis-public-rt` | `0.0.0.0/0 -> igw`, local route |
 | `aws_security_group` | `jarvis-instance-sg` | Zero ingress rules. Egress per section 2 |
@@ -51,7 +53,7 @@ wildcards. Every resource carries `app=jarvis`, `env=prod`, `owner=dushan` (AD20
 | `aws_eip` | `jarvis-eip` | Elastic IP bound to `jarvis-eni` (AD29). Stable source IP for the role's `aws:SourceIp` Deny |
 | `aws_launch_template` | `jarvis` | AMI, IMDS options, root volume, `jarvis-eni` as device 0, user_data |
 | `aws_instance` | `jarvis` | t4g.medium, `credit_specification = standard` (tighter), termination protection on |
-| `aws_cloudwatch_metric_alarm` | `jarvis-auto-recover` | `StatusCheckFailed_System` -> `arn:aws:automate:us-east-2:ec2:recover` + SNS |
+| `aws_cloudwatch_metric_alarm` | `jarvis-auto-recover` | `StatusCheckFailed_System` -> `arn:aws:automate:us-east-1:ec2:recover` + SNS |
 
 AMI: `data "aws_ami"`, owner `099720109477` (Canonical), name
 `ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-<arch>-server-*`, arch from `var.instance_type`
@@ -130,10 +132,11 @@ decide access).
 
 | Resource | Name | Purpose |
 |---|---|---|
-| `aws_organizations_account` | `jarvis-prod` | The account. `close_on_deletion = false`, `lifecycle.prevent_destroy` |
-| `aws_organizations_policy` + attachment | `jarvis-region-deny` | SCP 1 (section 11). Attachment gated by `var.attach_region_scp` default `false`. Before any attachment, `org/` checks read-only (`data "aws_organizations_organization"`) that the `SERVICE_CONTROL_POLICY` type is enabled, and fails the plan if not |
-| `aws_organizations_policy` + attachment | `jarvis-org-guard` | SCP 2 (section 11), always attached |
-| `aws_organizations_policy` + attachment | `jarvis-guardrail` | SCP 3 (section 11.3). Attachment gated by `var.attach_guardrail_scp` default `false` (AD27) |
+| `aws_organizations_organizational_unit` | `jarvis` | Deletable OU under the organization root that holds the account and carries the attached SCPs (AD35) |
+| `aws_organizations_account` | `jarvis-prod` | The account, inside the `jarvis` OU. `close_on_deletion = true` (AD35): `terraform destroy` here closes it (AWS's 90-day recovery window) |
+| `aws_organizations_policy` + attachment | `jarvis-region-deny` | SCP 1 (section 11). Attached to the `jarvis` OU, gated by `var.attach_region_scp` default `false`. Before any attachment, `org/` checks read-only (`data "aws_organizations_organization"`) that the `SERVICE_CONTROL_POLICY` type is enabled, and fails the plan if not |
+| `aws_organizations_policy` + attachment | `jarvis-org-guard` | SCP 2 (section 11), always attached to the `jarvis` OU |
+| `aws_organizations_policy` + attachment | `jarvis-guardrail` | SCP 3 (section 11.3). Attached to the `jarvis` OU, gated by `var.attach_guardrail_scp` default `false` (AD27) |
 | `aws_ssoadmin_permission_set` x3 | `JarvisClient`, `JarvisOperator`, `JarvisAdmin` | Section 3.12. All `aws_ssoadmin_*` resources exist only when `var.create_permission_sets = true` (default `false`, AD25); the runbook gives the manual alternative |
 | `aws_ssoadmin_permission_set_inline_policy` x2 | Client, Operator | Section 3.12 |
 | `aws_ssoadmin_managed_policy_attachment` | Admin -> AdministratorAccess | Terraform applies only |
@@ -222,15 +225,15 @@ Test harness rules (tighter):
 | # | Policy | Sid | Effect | Actions | Required condition (operator, key, value) |
 |---|---|---|---|---|---|
 | W1 | instance `jarvis-telemetry` | PutMetricDataJarvisNamespace | Allow | `cloudwatch:PutMetricData` | `StringEquals`, `cloudwatch:namespace`, `Jarvis` |
-| W2 | JarvisOperator | SsmAndEc2ReadOnly | Allow | `ssm:DescribeInstanceInformation, ssm:GetCommandInvocation, ssm:ListCommandInvocations, ssm:ListCommands, ssm:DescribeSessions, ec2:DescribeInstances` | `StringEquals`, `aws:RequestedRegion`, `us-east-2` |
+| W2 | JarvisOperator | SsmAndEc2ReadOnly | Allow | `ssm:DescribeInstanceInformation, ssm:GetCommandInvocation, ssm:ListCommandInvocations, ssm:ListCommands, ssm:DescribeSessions, ec2:DescribeInstances` | `StringEquals`, `aws:RequestedRegion`, `us-east-1` |
 | W3 | key `alias/jarvis` | AccountRootAdmin | Allow | `kms:*` | none; principal exactly `arn:aws:iam::ACCT:root` |
-| W4 | key `alias/jarvis` | CloudWatchLogsUse | Allow | `kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey*, kms:DescribeKey` | `ArnLike`, `kms:EncryptionContext:aws:logs:arn`, `arn:aws:logs:us-east-2:ACCT:log-group:/jarvis/*` |
-| W5 | key `alias/jarvis` | FlowLogDeliveryUse | Allow | same as W4 | `StringEquals`, `aws:SourceAccount`, `ACCT`; `ArnLike`, `aws:SourceArn`, `arn:aws:logs:us-east-2:ACCT:*` |
+| W4 | key `alias/jarvis` | CloudWatchLogsUse | Allow | `kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey*, kms:DescribeKey` | `ArnLike`, `kms:EncryptionContext:aws:logs:arn`, `arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/*` |
+| W5 | key `alias/jarvis` | FlowLogDeliveryUse | Allow | same as W4 | `StringEquals`, `aws:SourceAccount`, `ACCT`; `ArnLike`, `aws:SourceArn`, `arn:aws:logs:us-east-1:ACCT:*` |
 | W6 | key `alias/jarvis` | AlarmsAndBudgetsToSns | Allow | `kms:Decrypt, kms:GenerateDataKey*` | `StringEquals`, `aws:SourceAccount`, `ACCT`; principals exactly `cloudwatch.amazonaws.com`, `budgets.amazonaws.com` |
-| W7 | key `alias/jarvis` | BackupRoleUse | Allow | `kms:Decrypt, kms:DescribeKey, kms:GenerateDataKeyWithoutPlaintext, kms:ReEncrypt*` | `StringEquals`, `kms:ViaService`, `["ec2.us-east-2.amazonaws.com", "backup.us-east-2.amazonaws.com"]`; principal exactly `<role:jarvis-backup>` |
+| W7 | key `alias/jarvis` | BackupRoleUse | Allow | `kms:Decrypt, kms:DescribeKey, kms:GenerateDataKeyWithoutPlaintext, kms:ReEncrypt*` | `StringEquals`, `kms:ViaService`, `["ec2.us-east-1.amazonaws.com", "backup.us-east-1.amazonaws.com"]`; principal exactly `<role:jarvis-backup>` |
 | W8 | key `alias/jarvis` | BackupRoleGrants | Allow | `kms:CreateGrant` | `Bool`, `kms:GrantIsForAWSResource`, `true` |
 | W9 | key `alias/jarvis-tfstate` | AccountRootAdmin | Allow | `kms:*` | none; principal exactly account root |
-| W10 | SCP `jarvis-region-deny` | DenyOutsideHomeRegion | Deny | `NotAction` = the S1 list | `StringNotEquals`, `aws:RequestedRegion`, `["us-east-2"]` |
+| W10 | SCP `jarvis-region-deny` | DenyOutsideHomeRegion | Deny | `NotAction` = the S1 list | `StringNotEquals`, `aws:RequestedRegion`, `["us-east-1"]` |
 | W11 | SCP `jarvis-org-guard` | DenyLeaveOrganization | Deny | `organizations:LeaveOrganization` | none |
 | W12 | SCP `jarvis-org-guard` | DenyCloudTrailTampering | Deny | the S2 list (8 actions) | none |
 | W13 | instance `jarvis-secrets` | DenyOffInstance | Deny | `*` | `NotIpAddress`, `aws:SourceIp`, `<eip>/32`; `Bool`, `aws:ViaAWSService`, `false` |
@@ -250,12 +253,12 @@ must be `Deny` with `Action: "*"`; an `Allow` with `Action: "*"` anywhere fails 
 | P1 | instance `jarvis-artifacts` | ReadArtifacts | Allow | `s3:GetObject` | `jarvis-artifacts-ACCT/releases/*`, `.../bootstrap/*` | none |
 | P2 | instance `jarvis-telemetry` | WriteJarvisLogs | Allow | `logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams` | `log-group:/jarvis/work:*`, `/jarvis/personal:*`, `/jarvis/cloud-init:*` | none |
 | P3 | JarvisClient | ReadTokenSecrets | Allow | `secretsmanager:GetSecretValue` | `secret:jarvis/work/api-token-??????`, `secret:jarvis/personal/api-token-??????` | none |
-| P4 | JarvisClient | DecryptTokenSecrets | Allow | `kms:Decrypt` | `arn:aws:kms:us-east-2:ACCT:key/*` | `ForAnyValue:StringEquals`, `kms:ResourceAliases`, `alias/jarvis`; `StringEquals`, `kms:ViaService`, `secretsmanager.us-east-2.amazonaws.com`; `StringLike`, `kms:EncryptionContext:SecretARN`, the two P3 ARNs |
-| P5 | JarvisOperator | SessionAndCommandOnJarvisInstance | Allow | `ssm:StartSession, ssm:SendCommand` | `arn:aws:ec2:us-east-2:ACCT:instance/*` | `StringEquals`, `aws:ResourceTag/app`, `jarvis`; `BoolIfExists`, `ssm:SessionDocumentAccessCheck`, `true` |
-| P6 | JarvisOperator | OwnSessionsOnly | Allow | `ssm:TerminateSession, ssm:ResumeSession` | `arn:aws:ssm:us-east-2:ACCT:session/*` | none (self-restriction dropped, see DESIGN-IAM.md 3.12) |
+| P4 | JarvisClient | DecryptTokenSecrets | Allow | `kms:Decrypt` | `arn:aws:kms:us-east-1:ACCT:key/*` | `ForAnyValue:StringEquals`, `kms:ResourceAliases`, `alias/jarvis`; `StringEquals`, `kms:ViaService`, `secretsmanager.us-east-1.amazonaws.com`; `StringLike`, `kms:EncryptionContext:SecretARN`, the two P3 ARNs |
+| P5 | JarvisOperator | SessionAndCommandOnJarvisInstance | Allow | `ssm:StartSession, ssm:SendCommand` | `arn:aws:ec2:us-east-1:ACCT:instance/*` | `StringEquals`, `aws:ResourceTag/app`, `jarvis`; `BoolIfExists`, `ssm:SessionDocumentAccessCheck`, `true` |
+| P6 | JarvisOperator | OwnSessionsOnly | Allow | `ssm:TerminateSession, ssm:ResumeSession` | `arn:aws:ssm:us-east-1:ACCT:session/*` | none (self-restriction dropped, see DESIGN-IAM.md 3.12) |
 | P7 | JarvisOperator | WriteReleases | Allow | `s3:PutObject, s3:GetObject` | `jarvis-artifacts-ACCT/releases/*` | none |
 | P8 | JarvisOperator | PutValueSecrets | Allow | `secretsmanager:PutSecretValue, secretsmanager:DescribeSecret` | `secret:jarvis/{work,personal,shared,tailscale}-??????` (4 ARNs) | none |
-| P9 | JarvisOperator | JarvisKeyViaServices | Allow | `kms:GenerateDataKey, kms:Decrypt` | `arn:aws:kms:us-east-2:ACCT:key/*` | `ForAnyValue:StringEquals`, `kms:ResourceAliases`, `alias/jarvis`; `StringEquals`, `kms:ViaService`, `["s3.us-east-2.amazonaws.com", "secretsmanager.us-east-2.amazonaws.com"]` |
+| P9 | JarvisOperator | JarvisKeyViaServices | Allow | `kms:GenerateDataKey, kms:Decrypt` | `arn:aws:kms:us-east-1:ACCT:key/*` | `ForAnyValue:StringEquals`, `kms:ResourceAliases`, `alias/jarvis`; `StringEquals`, `kms:ViaService`, `["s3.us-east-1.amazonaws.com", "secretsmanager.us-east-1.amazonaws.com"]` |
 | P10 | artifacts bucket | DenyInsecureTransport | Deny | `s3:*` | `B`, `B/*` | `Bool`, `aws:SecureTransport`, `false` |
 | P11 | artifacts bucket | DenyUnlistedPrincipals | Deny | `s3:*` | `B`, `B/*` | `ArnNotLike`, `aws:PrincipalArn`, `<allowed>` (4 ARNs) |
 | P12 | artifacts bucket | DenyInstanceWrites | Deny | `s3:PutObject, s3:DeleteObject, s3:DeleteObjectVersion, s3:PutObjectAcl` | `B/*` | none; principal exactly `<role:jarvis-instance>` |
@@ -267,7 +270,7 @@ must be `Deny` with `Action: "*"`; an `Allow` with `Action: "*"` anywhere fails 
 | P18 | state bucket | DenyWrongKmsKey | Deny | `s3:PutObject` | `B/*` | `Null`, `s3:x-amz-server-side-encryption-aws-kms-key-id`, `false`; `StringNotEquals`, `s3:x-amz-server-side-encryption-aws-kms-key-id`, `<key:jarvis-tfstate>` (full ARN). No-header state/lock writes and UploadPart are allowed |
 | P19 | state bucket | DenyNonKmsEncryption | Deny | `s3:PutObject` | `B/*` | as P14 |
 | P20 | state bucket | DenyKmsWithoutKeyId | Deny | `s3:PutObject` | `B/*` | as P15 |
-| P21 | flow log bucket | AWSLogDeliveryWrite | Allow | `s3:PutObject` | `jarvis-flowlogs-ACCT/AWSLogs/ACCT/*` | `StringEquals`, `aws:SourceAccount`, `ACCT`; `StringEquals`, `s3:x-amz-acl`, `bucket-owner-full-control`; `ArnLike`, `aws:SourceArn`, `arn:aws:logs:us-east-2:ACCT:*`; principal exactly `delivery.logs.amazonaws.com` |
+| P21 | flow log bucket | AWSLogDeliveryWrite | Allow | `s3:PutObject` | `jarvis-flowlogs-ACCT/AWSLogs/ACCT/*` | `StringEquals`, `aws:SourceAccount`, `ACCT`; `StringEquals`, `s3:x-amz-acl`, `bucket-owner-full-control`; `ArnLike`, `aws:SourceArn`, `arn:aws:logs:us-east-1:ACCT:*`; principal exactly `delivery.logs.amazonaws.com` |
 | P22 | flow log bucket | DenyInsecureTransport | Deny | `s3:*` | `B`, `B/*` | `Bool`, `aws:SecureTransport`, `false` |
 
 `Principal: "*"` appears only in Deny statements (P10, P11, P13 to P20, P22, and SNS
@@ -460,7 +463,7 @@ Rules:
    `aws_s3_object` at `bootstrap/<output_sha256>/bootstrap.tar.gz`. The user_data template gets
    bucket, key, and sha256.
 2. user_data (< 16 KB, `set -euo pipefail`, no `set -x`, every `aws` call with `--region
-   us-east-2`): apt install the brief 3.1 package list,
+   us-east-1`): apt install the brief 3.1 package list,
    awscli v2 from the official zip (signature checked with the AWS CLI public key), and the
    CloudWatch agent `.deb` for the architecture.
 3. `aws s3 cp s3://.../bootstrap.tar.gz /opt/jarvis/bootstrap/`, `echo "<sha256>  bootstrap.tar.gz" | sha256sum -c`,
@@ -578,7 +581,7 @@ the heartbeat alarms also cover agent failure.
 | `jarvis-ofw-watch-disabled` | `Jarvis/OfwWatchDisabled` | Sum | 300 | 1 / 1 | `> 0` | notBreaching | |
 | `jarvis-disk-used` | `Jarvis/disk_used_percent` InstanceId, path=`/`, fstype=`ext4` | Maximum | 300 | 2 / 2 | `> 80` | missing | |
 | `jarvis-status-instance` | `AWS/EC2 StatusCheckFailed_Instance` InstanceId | Maximum | 60 | 3 / 3 | `>= 1` | missing | |
-| `jarvis-auto-recover` (compute) | `AWS/EC2 StatusCheckFailed_System` InstanceId | Maximum | 60 | 2 / 2 | `>= 1` | missing | `arn:aws:automate:us-east-2:ec2:recover` |
+| `jarvis-auto-recover` (compute) | `AWS/EC2 StatusCheckFailed_System` InstanceId | Maximum | 60 | 2 / 2 | `>= 1` | missing | `arn:aws:automate:us-east-1:ec2:recover` |
 
 ### 7.4 CloudWatch agent config outline (`ops/aws/cloudwatch-agent.json`)
 
@@ -659,11 +662,11 @@ With `runAsEnabled = false`, SSM sessions run as `ssm-user`, and root tools run 
 inside the session; this is the resolution of AD17's "runAs" wording. The tool shows the template
 diff, asks for confirmation, and applies it with `runuser -u jarvis-<mode> -- rsync` (AD31).
 Session logging is off (section 1, modules/ssm). Every `aws` call in the Makefile and scripts
-passes `--region us-east-2` (11.1).
+passes `--region us-east-1` (11.1).
 
-## 9. Cost estimate (us-east-2, on-demand, 730 h/month)
+## 9. Cost estimate (us-east-1, on-demand, 730 h/month)
 
-Prices are us-east-2 public list prices as of this writing, from knowledge. None were looked up
+Prices are us-east-1 public list prices as of this writing, from knowledge. None were looked up
 for this document, so there are no page citations. Verify at https://aws.amazon.com/pricing/
 before relying on the totals.
 
@@ -782,7 +785,7 @@ discovery off, so it never dials. Tailscale SSH is off (`--ssh=false`, no `ssh` 
 
 | Stops | Does not stop |
 |---|---|
-| Any regional API call outside us-east-2 by any principal in `jarvis-prod`, including admin, except the exempt global services (which include `kms:*`, AD28) | Anything in us-east-2 by JarvisAdmin; KMS keys created in other regions |
+| Any regional API call outside us-east-1 by any principal in `jarvis-prod`, including admin, except the exempt global services (which include `kms:*`, AD28) | Anything in us-east-1 by JarvisAdmin; KMS keys created in other regions |
 | `organizations:LeaveOrganization` | Actions in the management account (SCPs never apply there) |
 | Stopping, deleting, or reconfiguring CloudTrail trails and event data stores in the account (defense in depth) | The organization trail `management-events`, which lives in the management account and already records `jarvis-prod` |
 | With `attach_guardrail_scp`: IAM users, access keys, EC2 key pairs, SG ingress (section 11.3) | Those, while the flag is `false` (the default) |
@@ -803,11 +806,14 @@ discovery off, so it never dials. Tailscale SSH is off (`--ssh=false`, no `ssh` 
 - **Providers** (Anthropic, Slack, Google, Telegram, OFW, Tailscale control plane) see content
   or metadata by design.
 - **SSM Run Command output** is stored by AWS. That is why the documents print metadata only.
-- **The `sparko` management profile** is a long-lived IAM user access key. It can assume
+- **The `sparko` management profile** is a long-lived IAM user access key, used only to plan,
+  apply, and later destroy `org/` (AD36) -- the management account holds no state bucket, no
+  artifacts, and no operational access of its own. It can nonetheless assume
   `OrganizationAccountAccessRole` into `jarvis-prod`, which is admin there, and from there
-  `ssm:StartSession` gives root on the instance. SCPs do not bind the management account. The
-  runbook's first step recommends moving management-account access to Identity Center (and
-  deactivating the key) before the first apply; that is the human's call.
+  `ssm:StartSession` gives root on the instance: this is a latent AWS Organizations capability
+  that Terraform's own usage discipline does not remove, and SCPs do not bind the management
+  account either. The runbook's first step recommends moving management-account access to
+  Identity Center (and deactivating the key) before the first apply; that is the human's call.
 
 ## 11. SCPs
 
@@ -816,7 +822,7 @@ policy type is enabled before any attachment (section 1).
 
 ### 11.1 `jarvis-region-deny` (S1, attached to `jarvis-prod` only with `attach_region_scp`)
 
-One Deny with `NotAction` and `StringNotEquals aws:RequestedRegion = us-east-2`. Source (AD28): the
+One Deny with `NotAction` and `StringNotEquals aws:RequestedRegion = us-east-1`. Source (AD28): the
 brief's list (IAM, STS, Organizations, Support, CloudFront, Budgets, Route 53, KMS) merged with the
 AWS Control Tower region-deny control's `NotAction` list. S1 is that list as the architect knows
 it. Control Tower revises it, so Phase 2 diffs it against the current documentation. Unused items
@@ -828,7 +834,7 @@ The cost of `kms:*`: a principal in this account can create and use KMS keys in 
 is accepted under AD28. Only JarvisAdmin can create keys; the instance role cannot (no
 `kms:CreateKey`, plus the AD29 Deny).
 
-Consequence: every CLI caller passes `--region us-east-2` explicitly: the Windows client
+Consequence: every CLI caller passes `--region us-east-1` explicitly: the Windows client
 (`get-secret-value`), `user_data` and `bootstrap.sh`, the Makefile, and `scripts/*`. A default
 region from a profile or the environment is not relied on.
 
@@ -849,7 +855,9 @@ Dry run before attaching (AD28). Both steps are read-only and create nothing:
    file://<rendered>.json`. It must return no `ERROR` or `SECURITY_WARNING` findings.
 
 Then `attach_region_scp = true` in a planned window, with a smoke check (`terraform plan` of
-`envs/prod`, `make status`, a client token fetch). Rollback is detaching it from the management account.
+`envs/prod`, `make status`, a client token fetch). Rollback is setting `attach_region_scp = false`
+and re-applying `org/` (with the `sparko` profile, from the management account) -- the SCP attaches
+to, and detaches from, the `jarvis` OU, not the management account itself.
 
 ### 11.2 `jarvis-org-guard` (S2, always attached)
 

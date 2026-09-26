@@ -323,6 +323,31 @@ These tighten earlier decisions; where they conflict with the text above, this s
   release"; `runAsEnabled=false` on SSM is recorded as the resolution of AD17's "runAs" wording
   (interactive SSM runs as `ssm-user`, root tools go through `sudo` inside the session).
 
+### Re-targeting decisions (2026-09-25, after the first `org/` plan; the human's call)
+
+The human reviewed the first `org/` plan and changed two requirements. These win over AD20,
+AD21, and any earlier text.
+
+- **AD34 Region is us-east-1.** `aws_region` (envs/prod, bootstrap) and `home_region` (org)
+  default to `us-east-1`; the region-deny SCP allows `us-east-1`. Region literals leave every
+  script, the Makefile, the client, ops, and docs: the Makefile exports `AWS_REGION ?= us-east-1`
+  to `scripts/*`; on the instance, cloud-init writes the template's `region` variable to
+  `/etc/jarvis/region` and `ops/aws` tools read it; the Windows client gets an `aws_region` key
+  (default `us-east-1`). Terraform test fixtures and allowlist rows follow the variable.
+  Identity Center is already in us-east-1, which removes the cross-region SSO wrinkle.
+- **AD35 A deletable OU, not a bare account.** `org/` creates an OU named `jarvis` under the
+  organization root, creates the `jarvis-prod` account inside it with `close_on_deletion = true`,
+  and attaches the SCPs to the OU (not the account). Teardown is `terraform destroy` in `org/`
+  after `envs/prod` and `bootstrap` are gone: it closes the account (90-day AWS recovery window)
+  and deletes the OU.
+- **AD36 The management account holds nothing.** `org/` uses local Terraform state
+  (`infra/org/terraform.tfstate`, gitignored, backed up by the human) instead of an S3 bucket in
+  the management account; `backend.hcl` is no longer used there. The management identity
+  (`sparko`) is used only to plan and apply `org/` (create, and later destroy). Identity Center
+  permission sets and assignments are org-level by nature and stay in `org/`. The empty bucket
+  `sparko-org-tfstate-080109295043` created earlier in the management account is deleted by the
+  human. Everything else (state bucket, artifacts, instance, operations) lives in `jarvis-prod`.
+
 ## 4. Phases, owners, and gates
 
 Fable dispatches, reads results, and decides. Builders never call `terraform apply`, never write

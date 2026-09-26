@@ -32,12 +32,12 @@ Managed attachment: `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore` (brie
  {"Sid":"ReadModeSecrets","Effect":"Allow","Action":"secretsmanager:GetSecretValue",
   "Resource":["<secret:jarvis/work>","<secret:jarvis/personal>","<secret:jarvis/shared>","<secret:jarvis/tailscale>"]},
  {"Sid":"DecryptModeSecrets","Effect":"Allow","Action":"kms:Decrypt","Resource":"<key:jarvis>",
-  "Condition":{"StringEquals":{"kms:ViaService":"secretsmanager.us-east-2.amazonaws.com",
+  "Condition":{"StringEquals":{"kms:ViaService":"secretsmanager.us-east-1.amazonaws.com",
    "kms:EncryptionContext:SecretARN":["<secret:jarvis/work>","<secret:jarvis/personal>","<secret:jarvis/shared>","<secret:jarvis/tailscale>"]}}},
  {"Sid":"PublishApiTokens","Effect":"Allow","Action":"secretsmanager:PutSecretValue",
   "Resource":["<secret:jarvis/work/api-token>","<secret:jarvis/personal/api-token>"]},
  {"Sid":"EncryptApiTokens","Effect":"Allow","Action":["kms:GenerateDataKey","kms:Decrypt"],"Resource":"<key:jarvis>",
-  "Condition":{"StringEquals":{"kms:ViaService":"secretsmanager.us-east-2.amazonaws.com",
+  "Condition":{"StringEquals":{"kms:ViaService":"secretsmanager.us-east-1.amazonaws.com",
    "kms:EncryptionContext:SecretARN":["<secret:jarvis/work/api-token>","<secret:jarvis/personal/api-token>"]}}},
  {"Sid":"DenyOffInstance","Effect":"Deny","Action":"*","Resource":"*",
   "Condition":{"NotIpAddress":{"aws:SourceIp":"<eip>/32"},"Bool":{"aws:ViaAWSService":"false"}}}]}
@@ -77,7 +77,7 @@ scoped to the two token secret ARNs; the role cannot write the four value secret
  {"Sid":"ListArtifacts","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::jarvis-artifacts-ACCT",
   "Condition":{"StringLike":{"s3:prefix":["releases/*","bootstrap/*"]}}},
  {"Sid":"DecryptArtifacts","Effect":"Allow","Action":"kms:Decrypt","Resource":"<key:jarvis>",
-  "Condition":{"StringEquals":{"kms:ViaService":"s3.us-east-2.amazonaws.com"},
+  "Condition":{"StringEquals":{"kms:ViaService":"s3.us-east-1.amazonaws.com"},
    "StringLike":{"kms:EncryptionContext:aws:s3:arn":["arn:aws:s3:::jarvis-artifacts-ACCT","arn:aws:s3:::jarvis-artifacts-ACCT/*"]}}},
  {"Sid":"DenyOffInstance","Effect":"Deny","Action":"*","Resource":"*",
   "Condition":{"NotIpAddress":{"aws:SourceIp":"<eip>/32"},"Bool":{"aws:ViaAWSService":"false"}}}]}
@@ -92,8 +92,8 @@ scoped to the two token secret ARNs; the role cannot write the four value secret
 ```json
 {"Version":"2012-10-17","Statement":[
  {"Sid":"WriteJarvisLogs","Effect":"Allow","Action":["logs:CreateLogStream","logs:PutLogEvents","logs:DescribeLogStreams"],
-  "Resource":["arn:aws:logs:us-east-2:ACCT:log-group:/jarvis/work:*","arn:aws:logs:us-east-2:ACCT:log-group:/jarvis/personal:*",
-              "arn:aws:logs:us-east-2:ACCT:log-group:/jarvis/cloud-init:*"]},
+  "Resource":["arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/work:*","arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/personal:*",
+              "arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/cloud-init:*"]},
  {"Sid":"PutMetricDataJarvisNamespace","Effect":"Allow","Action":"cloudwatch:PutMetricData","Resource":"*",
   "Condition":{"StringEquals":{"cloudwatch:namespace":"Jarvis"}}},
  {"Sid":"DenyOffInstance","Effect":"Deny","Action":"*","Resource":"*",
@@ -113,17 +113,17 @@ No `ec2:Describe*` is granted. The agent config takes `InstanceId` from IMDS
 ```json
 {"Version":"2012-10-17","Statement":[
  {"Sid":"AccountRootAdmin","Effect":"Allow","Principal":{"AWS":"arn:aws:iam::ACCT:root"},"Action":"kms:*","Resource":"*"},
- {"Sid":"CloudWatchLogsUse","Effect":"Allow","Principal":{"Service":"logs.us-east-2.amazonaws.com"},
+ {"Sid":"CloudWatchLogsUse","Effect":"Allow","Principal":{"Service":"logs.us-east-1.amazonaws.com"},
   "Action":["kms:Encrypt","kms:Decrypt","kms:ReEncrypt*","kms:GenerateDataKey*","kms:DescribeKey"],"Resource":"*",
-  "Condition":{"ArnLike":{"kms:EncryptionContext:aws:logs:arn":"arn:aws:logs:us-east-2:ACCT:log-group:/jarvis/*"}}},
+  "Condition":{"ArnLike":{"kms:EncryptionContext:aws:logs:arn":"arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/*"}}},
  {"Sid":"FlowLogDeliveryUse","Effect":"Allow","Principal":{"Service":"delivery.logs.amazonaws.com"},
   "Action":["kms:Encrypt","kms:Decrypt","kms:ReEncrypt*","kms:GenerateDataKey*","kms:DescribeKey"],"Resource":"*",
-  "Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"},"ArnLike":{"aws:SourceArn":"arn:aws:logs:us-east-2:ACCT:*"}}},
+  "Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"},"ArnLike":{"aws:SourceArn":"arn:aws:logs:us-east-1:ACCT:*"}}},
  {"Sid":"AlarmsAndBudgetsToSns","Effect":"Allow","Principal":{"Service":["cloudwatch.amazonaws.com","budgets.amazonaws.com"]},
   "Action":["kms:Decrypt","kms:GenerateDataKey*"],"Resource":"*","Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"}}},
  {"Sid":"BackupRoleUse","Effect":"Allow","Principal":{"AWS":"<role:jarvis-backup>"},
   "Action":["kms:Decrypt","kms:DescribeKey","kms:GenerateDataKeyWithoutPlaintext","kms:ReEncrypt*"],"Resource":"*",
-  "Condition":{"StringEquals":{"kms:ViaService":["ec2.us-east-2.amazonaws.com","backup.us-east-2.amazonaws.com"]}}},
+  "Condition":{"StringEquals":{"kms:ViaService":["ec2.us-east-1.amazonaws.com","backup.us-east-1.amazonaws.com"]}}},
  {"Sid":"BackupRoleGrants","Effect":"Allow","Principal":{"AWS":"<role:jarvis-backup>"},"Action":"kms:CreateGrant","Resource":"*",
   "Condition":{"Bool":{"kms:GrantIsForAWSResource":"true"}}}]}
 ```
@@ -151,10 +151,10 @@ allowed by the flow log bucket policy below and by `FlowLogDeliveryUse` in 3.3.
  {"Sid":"AWSLogDeliveryWrite","Effect":"Allow","Principal":{"Service":"delivery.logs.amazonaws.com"},"Action":"s3:PutObject",
   "Resource":"arn:aws:s3:::jarvis-flowlogs-ACCT/AWSLogs/ACCT/*",
   "Condition":{"StringEquals":{"aws:SourceAccount":"ACCT","s3:x-amz-acl":"bucket-owner-full-control"},
-   "ArnLike":{"aws:SourceArn":"arn:aws:logs:us-east-2:ACCT:*"}}},
+   "ArnLike":{"aws:SourceArn":"arn:aws:logs:us-east-1:ACCT:*"}}},
  {"Sid":"AWSLogDeliveryAclCheck","Effect":"Allow","Principal":{"Service":"delivery.logs.amazonaws.com"},
   "Action":["s3:GetBucketAcl","s3:ListBucket"],"Resource":"arn:aws:s3:::jarvis-flowlogs-ACCT",
-  "Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"},"ArnLike":{"aws:SourceArn":"arn:aws:logs:us-east-2:ACCT:*"}}},
+  "Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"},"ArnLike":{"aws:SourceArn":"arn:aws:logs:us-east-1:ACCT:*"}}},
  {"Sid":"DenyInsecureTransport","Effect":"Deny","Principal":"*","Action":"s3:*",
   "Resource":["arn:aws:s3:::jarvis-flowlogs-ACCT","arn:aws:s3:::jarvis-flowlogs-ACCT/*"],
   "Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}
@@ -259,7 +259,7 @@ policy statements in 3.3.
   "Resource":"<topic:jarvis-alerts>"},
  {"Sid":"CloudWatchAlarmsPublish","Effect":"Allow","Principal":{"Service":"cloudwatch.amazonaws.com"},"Action":"sns:Publish",
   "Resource":"<topic:jarvis-alerts>","Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"},
-   "ArnLike":{"aws:SourceArn":"arn:aws:cloudwatch:us-east-2:ACCT:alarm:jarvis-*"}}},
+   "ArnLike":{"aws:SourceArn":"arn:aws:cloudwatch:us-east-1:ACCT:alarm:jarvis-*"}}},
  {"Sid":"BudgetsPublish","Effect":"Allow","Principal":{"Service":"budgets.amazonaws.com"},"Action":"sns:Publish",
   "Resource":"<topic:jarvis-alerts>","Condition":{"StringEquals":{"aws:SourceAccount":"ACCT"},
    "ArnLike":{"aws:SourceArn":"arn:aws:budgets::ACCT:*"}}},
@@ -290,13 +290,13 @@ JarvisOperator and JarvisAdmin and is not signed in on the workstation.
 ```json
 {"Version":"2012-10-17","Statement":[
  {"Sid":"ReadTokenSecrets","Effect":"Allow","Action":"secretsmanager:GetSecretValue",
-  "Resource":["arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/work/api-token-??????",
-              "arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/personal/api-token-??????"]},
- {"Sid":"DecryptTokenSecrets","Effect":"Allow","Action":"kms:Decrypt","Resource":"arn:aws:kms:us-east-2:ACCT:key/*",
+  "Resource":["arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/work/api-token-??????",
+              "arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/personal/api-token-??????"]},
+ {"Sid":"DecryptTokenSecrets","Effect":"Allow","Action":"kms:Decrypt","Resource":"arn:aws:kms:us-east-1:ACCT:key/*",
   "Condition":{"ForAnyValue:StringEquals":{"kms:ResourceAliases":"alias/jarvis"},
-   "StringEquals":{"kms:ViaService":"secretsmanager.us-east-2.amazonaws.com"},
-   "StringLike":{"kms:EncryptionContext:SecretARN":["arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/work/api-token-??????",
-     "arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/personal/api-token-??????"]}}}]}
+   "StringEquals":{"kms:ViaService":"secretsmanager.us-east-1.amazonaws.com"},
+   "StringLike":{"kms:EncryptionContext:SecretARN":["arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/work/api-token-??????",
+     "arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/personal/api-token-??????"]}}}]}
 ```
 - ReadTokenSecrets: brief 4.6. `org/` is applied before the secrets exist, so the 6-character
   suffix is a `?` pattern. `jarvis/work-??????` cannot match `jarvis/work/api-token-...`.
@@ -306,28 +306,28 @@ JarvisOperator and JarvisAdmin and is not signed in on the workstation.
 ```json
 {"Version":"2012-10-17","Statement":[
  {"Sid":"SessionAndCommandOnJarvisInstance","Effect":"Allow","Action":["ssm:StartSession","ssm:SendCommand"],
-  "Resource":"arn:aws:ec2:us-east-2:ACCT:instance/*","Condition":{"StringEquals":{"aws:ResourceTag/app":"jarvis"},
+  "Resource":"arn:aws:ec2:us-east-1:ACCT:instance/*","Condition":{"StringEquals":{"aws:ResourceTag/app":"jarvis"},
    "BoolIfExists":{"ssm:SessionDocumentAccessCheck":"true"}}},
  {"Sid":"SessionDocuments","Effect":"Allow","Action":"ssm:StartSession",
-  "Resource":["arn:aws:ssm:us-east-2::document/AWS-StartPortForwardingSession","arn:aws:ssm:us-east-2::document/AWS-StartInteractiveCommand",
-              "arn:aws:ssm:us-east-2:ACCT:document/SSM-SessionManagerRunShell"]},
+  "Resource":["arn:aws:ssm:us-east-1::document/AWS-StartPortForwardingSession","arn:aws:ssm:us-east-1::document/AWS-StartInteractiveCommand",
+              "arn:aws:ssm:us-east-1:ACCT:document/SSM-SessionManagerRunShell"]},
  {"Sid":"CommandDocuments","Effect":"Allow","Action":"ssm:SendCommand",
-  "Resource":["arn:aws:ssm:us-east-2:ACCT:document/jarvis-deploy","arn:aws:ssm:us-east-2:ACCT:document/jarvis-restart",
-              "arn:aws:ssm:us-east-2:ACCT:document/jarvis-secrets-sync","arn:aws:ssm:us-east-2:ACCT:document/jarvis-status"]},
+  "Resource":["arn:aws:ssm:us-east-1:ACCT:document/jarvis-deploy","arn:aws:ssm:us-east-1:ACCT:document/jarvis-restart",
+              "arn:aws:ssm:us-east-1:ACCT:document/jarvis-secrets-sync","arn:aws:ssm:us-east-1:ACCT:document/jarvis-status"]},
  {"Sid":"OwnSessionsOnly","Effect":"Allow","Action":["ssm:TerminateSession","ssm:ResumeSession"],
-  "Resource":"arn:aws:ssm:us-east-2:ACCT:session/*"},
+  "Resource":"arn:aws:ssm:us-east-1:ACCT:session/*"},
  {"Sid":"SsmAndEc2ReadOnly","Effect":"Allow","Action":["ssm:DescribeInstanceInformation","ssm:GetCommandInvocation",
    "ssm:ListCommandInvocations","ssm:ListCommands","ssm:DescribeSessions","ec2:DescribeInstances"],"Resource":"*",
-  "Condition":{"StringEquals":{"aws:RequestedRegion":"us-east-2"}}},
+  "Condition":{"StringEquals":{"aws:RequestedRegion":"us-east-1"}}},
  {"Sid":"WriteReleases","Effect":"Allow","Action":["s3:PutObject","s3:GetObject"],"Resource":"arn:aws:s3:::jarvis-artifacts-ACCT/releases/*"},
  {"Sid":"ListReleases","Effect":"Allow","Action":"s3:ListBucket","Resource":"arn:aws:s3:::jarvis-artifacts-ACCT",
   "Condition":{"StringLike":{"s3:prefix":["releases/*"]}}},
  {"Sid":"PutValueSecrets","Effect":"Allow","Action":["secretsmanager:PutSecretValue","secretsmanager:DescribeSecret"],
-  "Resource":["arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/work-??????","arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/personal-??????",
-              "arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/shared-??????","arn:aws:secretsmanager:us-east-2:ACCT:secret:jarvis/tailscale-??????"]},
- {"Sid":"JarvisKeyViaServices","Effect":"Allow","Action":["kms:GenerateDataKey","kms:Decrypt"],"Resource":"arn:aws:kms:us-east-2:ACCT:key/*",
+  "Resource":["arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/work-??????","arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/personal-??????",
+              "arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/shared-??????","arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/tailscale-??????"]},
+ {"Sid":"JarvisKeyViaServices","Effect":"Allow","Action":["kms:GenerateDataKey","kms:Decrypt"],"Resource":"arn:aws:kms:us-east-1:ACCT:key/*",
   "Condition":{"ForAnyValue:StringEquals":{"kms:ResourceAliases":"alias/jarvis"},
-   "StringEquals":{"kms:ViaService":["s3.us-east-2.amazonaws.com","secretsmanager.us-east-2.amazonaws.com"]}}}]}
+   "StringEquals":{"kms:ViaService":["s3.us-east-1.amazonaws.com","secretsmanager.us-east-1.amazonaws.com"]}}}]}
 ```
 - SessionAndCommandOnJarvisInstance: shell, port forwarding (`oauth-login.sh`) and Run Command,
   only on instances tagged `app=jarvis`. The instance id is unknown in `org/`.
@@ -371,9 +371,9 @@ The operator has no `GetSecretValue` on any secret, no IAM, and no `terraform ap
    "s3:ListStorageLensConfigurations","s3:PutAccountPublicAccessBlock","s3:PutMultiRegionAccessPointPolicy",
    "savingsplans:*","shield:*","sso:*","sts:*","support:*","supportapp:*","supportplans:*","sustainability:*",
    "tag:GetResources","tax:*","trustedadvisor:*","vendor-insights:ListEntitledSecurityProfiles","waf-regional:*","waf:*","wafv2:*"],
-  "Condition":{"StringNotEquals":{"aws:RequestedRegion":["us-east-2"]}}}]}
+  "Condition":{"StringNotEquals":{"aws:RequestedRegion":["us-east-1"]}}}]}
 ```
-- DenyOutsideHomeRegion: nothing regional runs outside us-east-2; the global and us-east-1-only
+- DenyOutsideHomeRegion: nothing regional runs outside us-east-1; the global and us-east-1-only
   services above stay usable.
 
 ### S2 `jarvis-org-guard`
