@@ -35,11 +35,15 @@ class TrayApp:
     `on_quit()` are plain callbacks supplied by __main__.py so this module stays UI-only."""
 
     def __init__(self, on_open_vault: Callable[[str], None], on_pending: Callable[[str], None],
-                 on_restart: Callable[[], None], on_quit: Callable[[], None]):
+                 on_restart: Callable[[], None], on_quit: Callable[[], None],
+                 show_restart: bool = True):
         self._on_open_vault = on_open_vault
         self._on_pending = on_pending
         self._on_restart = on_restart
         self._on_quit = on_quit
+        # LOW: "Restart Daemon" wsl.exe's the local WSL unit -- meaningless (and hidden) under the
+        # aws profile, where the daemons run on the box, not restartable from the tray at all.
+        self._show_restart = show_restart
         self._icon = None
         self._state = "idle"
         self._lock = threading.Lock()
@@ -50,23 +54,33 @@ class TrayApp:
             return self._state
 
     def set_state(self, state: str) -> None:
+        # LOW: never touches .title -- set_tooltip() is the only thing that owns the tooltip text
+        # (per-mode health), so a state change (idle/recording/thinking) can't clobber it.
         with self._lock:
             self._state = state
             if self._icon is not None:
                 self._icon.icon = _draw_icon(STATE_COLORS.get(state, STATE_COLORS["idle"]))
-                self._icon.title = f"Jarvis ({state})"
+
+    def set_tooltip(self, text: str) -> None:
+        """The only setter of .title: used to list each mode's health so the tooltip stays
+        informative regardless of what set_state() is doing to the icon's color."""
+        with self._lock:
+            if self._icon is not None:
+                self._icon.title = text
 
     def _build_menu(self):
         import pystray
 
-        return pystray.Menu(
+        items = [
             pystray.MenuItem("Open Work Vault", lambda: self._on_open_vault("work")),
             pystray.MenuItem("Open Personal Vault", lambda: self._on_open_vault("personal")),
             pystray.MenuItem("Pending (work)", lambda: self._on_pending("work")),
             pystray.MenuItem("Pending (personal)", lambda: self._on_pending("personal")),
-            pystray.MenuItem("Restart Daemon", lambda: self._on_restart()),
-            pystray.MenuItem("Quit", lambda: self._on_quit()),
-        )
+        ]
+        if self._show_restart:
+            items.append(pystray.MenuItem("Restart Daemon", lambda: self._on_restart()))
+        items.append(pystray.MenuItem("Quit", lambda: self._on_quit()))
+        return pystray.Menu(*items)
 
     def run(self) -> None:
         """Blocks until stop() is called (or the user quits from the menu)."""
@@ -92,7 +106,16 @@ class TrayStateCoordinator:
         self._unreachable = False
         self._recording_modes: set[str] = set()
         self._transient: str | None = None
+        self._mode_health: dict[str, bool] = {}
         self._lock = threading.Lock()
+
+    def set_mode_health(self, mode: str, healthy: bool) -> None:
+        """Per-mode status for the tooltip (health per mode: icon grey only when both are down,
+        tooltip lists each). Independent of set_unreachable, which drives the icon's color."""
+        with self._lock:
+            self._mode_health[mode] = healthy
+            parts = [f"{m}: {'ok' if ok else 'offline'}" for m, ok in sorted(self._mode_health.items())]
+        self._tray.set_tooltip("Jarvis (" + ", ".join(parts) + ")" if parts else "Jarvis")
 
     def set_unreachable(self, unreachable: bool) -> None:
         """Only acts (and re-applies the resting state) on an actual change -- a health poll
@@ -142,25 +165,36 @@ class TrayStateCoordinator:
             self._tray.set_state("idle")
 
 
-def start_health_poller(api, coordinator: TrayStateCoordinator, speak: Callable[[str], None],
+def _is_healthy(api) -> bool:
+    try:
+        api.health()
+        return True
+    except Exception:
+        return False
+
+
+def start_health_poller(apis: dict[str, object], coordinator, speak: Callable[[str], None],
                          interval: float = HEALTH_POLL_SECONDS,
                          stop_event: threading.Event | None = None) -> threading.Thread:
-    """Polls /health every `interval` seconds. Speaks "Jarvis is offline" once, on the transition
-    into daemon-unreachable, not on every failed poll."""
+    """Polls /health for every mode in `apis` (mode -> object with .health()) every `interval`
+    seconds. `coordinator.set_mode_health(mode, healthy)` is called for each mode on every poll
+    (drives the tooltip); `coordinator.set_unreachable(all_down)` is called once per poll with
+    whether EVERY mode is down (drives the icon: grey only when both are down). Speaks "Jarvis is
+    offline" once, on the transition into all-down, not on every failed poll and not when only
+    some modes are down."""
     stop_event = stop_event or threading.Event()
 
     def _poll() -> None:
-        was_unreachable = False
+        was_all_down = False
         while not stop_event.is_set():
-            try:
-                api.health()
-                was_unreachable = False
-                coordinator.set_unreachable(False)
-            except Exception:
-                if not was_unreachable:
-                    speak("Jarvis is offline")
-                was_unreachable = True
-                coordinator.set_unreachable(True)
+            healthy = {mode: _is_healthy(api) for mode, api in apis.items()}
+            for mode, ok in healthy.items():
+                coordinator.set_mode_health(mode, ok)
+            all_down = bool(healthy) and not any(healthy.values())
+            if all_down and not was_all_down:
+                speak("Jarvis is offline")
+            was_all_down = all_down
+            coordinator.set_unreachable(all_down)
             stop_event.wait(interval)
 
     thread = threading.Thread(target=_poll, daemon=True, name="jarvis-health-poller")

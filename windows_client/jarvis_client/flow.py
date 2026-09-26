@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 CONFIRM_TIMEOUT_SECONDS = 60.0
-MODE_HINT = {"work": "Press Ctrl+Alt+W for work", "personal": "Press Ctrl+Alt+P for personal"}
 CONFIRM_WORDS = {"yes", "continue", "confirm"}
 NOTHING_SENT = "Nothing was sent."
 TRAILING_PUNCT = re.compile(r"^[\s.,!?;:'\"]+|[\s.,!?;:'\"]+$")
@@ -51,13 +50,19 @@ def sha256_hex(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def other_mode(mode: str) -> str:
-    return "personal" if mode == "work" else "work"
-
-
 @dataclass(frozen=True)
-class _AwaitingMode:
+class _AwaitingModeConfirm:
+    """AD15: `/utterance` returns `needs_mode` + `suggested_mode` (the other mode's name, or
+    null). The client re-sends to the other endpoint only after the human says "confirm" within
+    CONFIRM_TIMEOUT_SECONDS, spoken on the SAME hotkey as the original ambiguous utterance, and
+    not before the confirm prompt finished being spoken (M8: mirrors _AwaitingConfirm's own
+    same-mode and stale-audio guards exactly); anything else cancels."""
+
     original_text: str
+    suggested_mode: str
+    mode: str                  # the hotkey mode of the ORIGINAL ambiguous utterance
+    deadline: float
+    prompt_finished_at: float
 
 
 @dataclass(frozen=True)
@@ -76,7 +81,7 @@ class VoiceFlow:
         self._api = api
         self._speak = speak
         self._clock = clock
-        self._awaiting_mode: _AwaitingMode | None = None
+        self._awaiting_mode_confirm: _AwaitingModeConfirm | None = None
         self._awaiting_confirm: _AwaitingConfirm | None = None
         self._lock = threading.Lock()
 
@@ -94,8 +99,8 @@ class VoiceFlow:
             if self._awaiting_confirm is not None:
                 self._handle_confirm(text, mode, started_at)
                 return
-            if self._awaiting_mode is not None:
-                self._handle_mode_answer(text, mode)
+            if self._awaiting_mode_confirm is not None:
+                self._handle_mode_confirm(text, mode, started_at)
                 return
             self._handle_new(text, mode)
 
@@ -112,23 +117,38 @@ class VoiceFlow:
 
     def _do_utterance(self, text: str, mode: str, mode_confirmed: bool) -> None:
         result = self._api.utterance(text, mode, mode_confirmed)
-        self._speak(result.get("reply", ""))
-        self._awaiting_mode = _AwaitingMode(original_text=text) if result.get("needs_mode") else None
-
-    # -- needs_mode round trip ------------------------------------------------------------
-
-    def _handle_mode_answer(self, text: str, mode: str) -> None:
-        pending = self._awaiting_mode
-        norm = normalize(text)
-        if norm == mode or norm in CONFIRM_WORDS:
-            self._awaiting_mode = None
-            self._do_utterance(pending.original_text, mode, mode_confirmed=True)
+        suggested = result.get("suggested_mode")
+        if result.get("needs_mode") and suggested:
+            self._speak(f"That sounds like {suggested}. Say confirm to send it there.")
+            self._awaiting_mode_confirm = _AwaitingModeConfirm(
+                original_text=text, suggested_mode=suggested, mode=mode,
+                deadline=self._clock() + CONFIRM_TIMEOUT_SECONDS,
+                prompt_finished_at=self._clock(),
+            )
             return
-        if norm == other_mode(mode):
-            self._speak(MODE_HINT[other_mode(mode)])
-            return  # stays in _awaiting_mode, waiting for the matching hotkey
-        self._awaiting_mode = None
-        self._handle_new(text, mode)
+        self._awaiting_mode_confirm = None
+        self._speak(result.get("reply", ""))
+
+    # -- needs_mode / suggested_mode round trip --------------------------------------------
+
+    def _handle_mode_confirm(self, text: str, mode: str, started_at: float) -> None:
+        """AD15: only the exact word "confirm", spoken on the SAME hotkey as the original
+        ambiguous utterance and not before the prompt finished being spoken, within the timeout,
+        re-sends to the suggested mode with mode_confirmed=true (M8: same guard order as
+        _handle_confirm). Anything else -- the other hotkey, stale audio, a different word, a
+        timeout -- cancels; there is no hint-and-retry step any more."""
+        pending = self._awaiting_mode_confirm
+        self._awaiting_mode_confirm = None
+        if mode != pending.mode or self._clock() >= pending.deadline:
+            self._speak(NOTHING_SENT)
+            return
+        if started_at < pending.prompt_finished_at:
+            self._speak(NOTHING_SENT)
+            return
+        if normalize(text) != "confirm":
+            self._speak(NOTHING_SENT)
+            return
+        self._do_utterance(pending.original_text, pending.suggested_mode, mode_confirmed=True)
 
     # -- approve intent --------------------------------------------------------------------
 
