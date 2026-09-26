@@ -26,6 +26,14 @@ install_units() {
   install -m 0644 -o root -g root "$script_dir/systemd/jarvis-logexport@.service" /etc/systemd/system/
   install -m 0644 -o root -g root "$script_dir/systemd/jarvis-vault-commit@.service" /etc/systemd/system/
   install -m 0644 -o root -g root "$script_dir/systemd/jarvis-vault-commit@.timer" /etc/systemd/system/
+  install -m 0644 -o root -g root "$script_dir/systemd/ofw-mcp.service" /etc/systemd/system/
+
+  # AD37: per-instance drop-in that points jarvis-logexport@ofw.service at ofw-mcp.service
+  # instead of the jarvis@ofw.service the template would otherwise expand to.
+  install -d -m 0755 /etc/systemd/system/jarvis-logexport@ofw.service.d
+  install -m 0644 -o root -g root \
+    "$script_dir/systemd/jarvis-logexport@ofw.service.d/unit.conf" \
+    /etc/systemd/system/jarvis-logexport@ofw.service.d/unit.conf
 
   install -d -m 0755 /etc/systemd/system/syncthing@.service.d
   install -m 0644 -o root -g root "$script_dir/systemd/syncthing-override.conf" \
@@ -57,6 +65,7 @@ enable_and_start_units() {
     jarvis-secrets.service
     jarvis-logexport@work.service
     jarvis-logexport@personal.service
+    jarvis-logexport@ofw.service
     syncthing@jarvis-work.service
     syncthing@jarvis-personal.service
     jarvis-vault-commit@work.timer
@@ -64,6 +73,7 @@ enable_and_start_units() {
     amazon-cloudwatch-agent.service
     jarvis@work.service
     jarvis@personal.service
+    ofw-mcp.service
   )
   local failed=0 unit
 

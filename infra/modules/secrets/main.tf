@@ -1,10 +1,11 @@
 locals {
-  # Six secrets (AD6, AD7). Values are set by the human or the instance, never by Terraform.
+  # Seven secrets (AD6, AD7, AD34). Values are set by the human or the instance, never by Terraform.
   value_secrets = {
     work      = { name = "jarvis/work", description = "Work mode env (AD7), set by the human" }
     personal  = { name = "jarvis/personal", description = "Personal mode env (AD7), set by the human" }
     shared    = { name = "jarvis/shared", description = "Keys allowed in both modes (AD7), set by the human" }
     tailscale = { name = "jarvis/tailscale", description = "Tailscale auth key, first boot only (AD7)" }
+    ofw       = { name = "jarvis/ofw", description = "OFW MCP server credentials and token hashes (AD34), set by the human" }
   }
 
   token_secrets = {

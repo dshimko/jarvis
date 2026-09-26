@@ -30,7 +30,6 @@ modes:
       - mcp__gmail__send_message
     repos:
       pulse: ~/code/pulse
-      ofw-mcp: ~/code/ofw-mcp
       docketsense: ~/code/docketsense
   personal:
     channels: [telegram, voice]
@@ -44,6 +43,7 @@ modes:
       - mcp__ofw__list_events
       - mcp__ofw__list_expenses
       - mcp__ofw__list_journal
+      - mcp__ofw__ofw_status      # local server state only; never contacts OFW (AD35)
     write_tools:
       - mcp__gmail__send_message
       - mcp__ofw__send_message
@@ -61,4 +61,4 @@ schedule:
     end-of-day: "18:00"
   personal:
     evening-review: "21:00"
-    ofw-check: "12:00"
+    # No OFW schedule: the Gmail watcher runs /ofw-notify on each OFW email (AD39); /ofw-check is on demand.

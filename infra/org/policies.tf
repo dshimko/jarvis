@@ -7,7 +7,7 @@ locals {
     "arn:aws:secretsmanager:${local.r}:${local.acct}:secret:jarvis/personal/api-token-??????",
   ]
   value_secret_patterns = [
-    for n in ["work", "personal", "shared", "tailscale"] :
+    for n in ["work", "personal", "shared", "tailscale", "ofw"] : # ofw: PLAN AD34, set by the human
     "arn:aws:secretsmanager:${local.r}:${local.acct}:secret:jarvis/${n}-??????"
   ]
   artifacts_arn = "arn:aws:s3:::jarvis-artifacts-${local.acct}"
@@ -95,7 +95,10 @@ locals {
           Effect = "Allow"
           Action = "ssm:SendCommand"
           Resource = [
-            for d in ["jarvis-deploy", "jarvis-restart", "jarvis-secrets-sync", "jarvis-status"] :
+            for d in [
+              "jarvis-deploy", "jarvis-restart", "jarvis-secrets-sync", "jarvis-status",
+              "jarvis-ofw-login", "jarvis-ofw-reset", # PLAN AD40
+            ] :
             "arn:aws:ssm:${local.r}:${local.acct}:document/${d}"
           ]
         },

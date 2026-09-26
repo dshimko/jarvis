@@ -16,6 +16,7 @@ WORK_ENV = {"SLACK_MCP_URL": "https://slack.example.test/mcp", "SLACK_WORK_TOKEN
 PERSONAL_ENV = {"GMAIL_MCP_URL": "https://gmail-personal.example.test/mcp",
                 "GMAIL_PERSONAL_TOKEN": "gmail-personal-secret-3333",
                 "OFW_MCP_URL": "https://ofw.example.test/mcp", "OFW_MCP_TOKEN": "ofw-personal-secret-4444",
+                "OFW_MCP_WRITE_TOKEN": "ofw-write-secret-5555",
                 "TELEGRAM_BOT_TOKEN": "", "TELEGRAM_OWNER_CHAT_ID": ""}
 PERSONAL_SECRETS = [v for v in PERSONAL_ENV.values() if len(v) >= 8]
 WORK_SECRETS = [v for v in WORK_ENV.values() if len(v) >= 8]
@@ -87,8 +88,10 @@ def meta_of(path: Path) -> dict:
 
 
 class FakeResult:
-    def __init__(self, is_error: bool = False, content: str = "ok"):
+    """An MCP CallToolResult. structuredContent carries the ofw status (AD35); other servers ignore it."""
+    def __init__(self, is_error: bool = False, content="ok", structured: dict | None = None):
         self.isError, self.content = is_error, content
+        self.structuredContent = {"status": "sent"} if structured is None else structured
 
 
 @pytest.fixture

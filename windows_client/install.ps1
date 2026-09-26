@@ -36,7 +36,7 @@
 
 .PARAMETER AwsRegion
     The region passed as `--region` on every `aws secretsmanager get-secret-value` call and
-    written into client.yaml as aws_region (PLAN.md AD34: region literals leave every script,
+    written into client.yaml as aws_region (PLAN.md AD42: region literals leave every script,
     including this one). Only used under -ClientProfile aws.
 #>
 param(

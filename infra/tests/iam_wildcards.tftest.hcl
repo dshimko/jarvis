@@ -131,6 +131,12 @@ run "prod" {
     values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/tailscale-DDDDDD" }
   }
 
+  # PLAN AD34: X3/X4 in check_prod pin the five value ARNs (ofw.tftest.hcl asserts them too).
+  override_resource {
+    target = module.secrets.aws_secretsmanager_secret.value["ofw"]
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/ofw-GGGGGG" }
+  }
+
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.token["work"]
     values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/work/api-token-EEEEEE" }
@@ -212,12 +218,12 @@ run "org" {
 
   assert {
     condition     = aws_organizations_account.jarvis_prod.parent_id == output.ou_id && aws_organizations_account.jarvis_prod.close_on_deletion
-    error_message = "AD35: jarvis-prod must sit in the jarvis OU with close_on_deletion = true."
+    error_message = "AD43: jarvis-prod must sit in the jarvis OU with close_on_deletion = true."
   }
 
   assert {
     condition     = alltrue([for a in aws_organizations_policy_attachment.scp : a.target_id == output.ou_id])
-    error_message = "AD35: every SCP must be attached to the jarvis OU, not the account."
+    error_message = "AD43: every SCP must be attached to the jarvis OU, not the account."
   }
 }
 

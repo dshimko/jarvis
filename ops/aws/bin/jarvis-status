@@ -12,12 +12,30 @@ fi
 echo "== unit states =="
 for unit in jarvis@work.service jarvis@personal.service jarvis-secrets.service \
   jarvis-imds-guard.service jarvis-logexport@work.service jarvis-logexport@personal.service \
-  syncthing@jarvis-work.service syncthing@jarvis-personal.service \
+  jarvis-logexport@ofw.service syncthing@jarvis-work.service syncthing@jarvis-personal.service \
   jarvis-vault-commit@work.timer jarvis-vault-commit@personal.timer \
-  amazon-cloudwatch-agent.service; do
+  amazon-cloudwatch-agent.service ofw-mcp.service; do
   state=$(systemctl is-active "$unit" 2>/dev/null)
   echo "$unit: ${state:-unknown}"
 done
+
+echo "== ofw-mcp healthz =="
+# AD33: loopback-only, no auth; root is one of the two uids the iptables rule allows through on
+# 8783. Extract only the two named fields -- never echo the raw response body (it is not secret,
+# but nothing beyond `ok`/`breaker` is a contract this tool promises to print).
+healthz=$(curl -s -m 2 http://127.0.0.1:8783/healthz 2>/dev/null)
+if [ -n "$healthz" ]; then
+  # jq's `//` alternative operator treats `false` as falsy too, so `.ok // empty` would print
+  # "unknown" for a JSON `false` value -- test the type explicitly instead (has("ok") alone would
+  # still accept a non-boolean "ok", e.g. a string or number, which is not this contract).
+  ok=$(echo "$healthz" | jq -r 'if (.ok|type)=="boolean" then (.ok|tostring) else empty end' 2>/dev/null)
+  breaker=$(echo "$healthz" | \
+    jq -r 'if (.breaker=="open" or .breaker=="closed") then .breaker else empty end' 2>/dev/null)
+  echo "ok: ${ok:-unknown}"
+  echo "breaker: ${breaker:-unknown}"
+else
+  echo "healthz: unreachable"
+fi
 
 echo "== last heartbeat =="
 for mode in work personal; do

@@ -12,4 +12,10 @@
 -A OUTPUT -o lo -p tcp --dport 8385 -m owner --uid-owner 0 -j ACCEPT
 -A OUTPUT -o lo -p tcp --dport 8385 -m owner --uid-owner 2002 -j ACCEPT
 -A OUTPUT -o lo -p tcp --dport 8385 -j REJECT --reject-with tcp-reset
+-A OUTPUT -o lo -p tcp --dport 8783 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 8783 -m owner --uid-owner 2002 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 8783 -j REJECT --reject-with tcp-reset
+-A OUTPUT -o lo -p tcp --dport 9222 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 9222 -m owner --uid-owner 2003 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 9222 -j REJECT --reject-with tcp-reset
 COMMIT

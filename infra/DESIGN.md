@@ -1,6 +1,6 @@
 # Jarvis on AWS: design
 
-Re-targeted 2026-09-25 (PLAN.md AD34 to AD36).
+Re-targeted 2026-09-25 (PLAN.md AD42 to AD44).
 
 Phase 1 deliverable. It is a design only; there is no code here. Inputs: `infra/PLAN.md` (AD1 to
 AD21, and AD22 to AD30 in PLAN 3.1, which answer this design's first-round questions),
@@ -132,8 +132,8 @@ decide access).
 
 | Resource | Name | Purpose |
 |---|---|---|
-| `aws_organizations_organizational_unit` | `jarvis` | Deletable OU under the organization root that holds the account and carries the attached SCPs (AD35) |
-| `aws_organizations_account` | `jarvis-prod` | The account, inside the `jarvis` OU. `close_on_deletion = true` (AD35): `terraform destroy` here closes it (AWS's 90-day recovery window) |
+| `aws_organizations_organizational_unit` | `jarvis` | Deletable OU under the organization root that holds the account and carries the attached SCPs (AD43) |
+| `aws_organizations_account` | `jarvis-prod` | The account, inside the `jarvis` OU. `close_on_deletion = true` (AD43): `terraform destroy` here closes it (AWS's 90-day recovery window) |
 | `aws_organizations_policy` + attachment | `jarvis-region-deny` | SCP 1 (section 11). Attached to the `jarvis` OU, gated by `var.attach_region_scp` default `false`. Before any attachment, `org/` checks read-only (`data "aws_organizations_organization"`) that the `SERVICE_CONTROL_POLICY` type is enabled, and fails the plan if not |
 | `aws_organizations_policy` + attachment | `jarvis-org-guard` | SCP 2 (section 11), always attached to the `jarvis` OU |
 | `aws_organizations_policy` + attachment | `jarvis-guardrail` | SCP 3 (section 11.3). Attached to the `jarvis` OU, gated by `var.attach_guardrail_scp` default `false` (AD27) |
@@ -807,7 +807,7 @@ discovery off, so it never dials. Tailscale SSH is off (`--ssh=false`, no `ssh` 
   or metadata by design.
 - **SSM Run Command output** is stored by AWS. That is why the documents print metadata only.
 - **The `sparko` management profile** is a long-lived IAM user access key, used only to plan,
-  apply, and later destroy `org/` (AD36) -- the management account holds no state bucket, no
+  apply, and later destroy `org/` (AD44) -- the management account holds no state bucket, no
   artifacts, and no operational access of its own. It can nonetheless assume
   `OrganizationAccountAccessRole` into `jarvis-prod`, which is admin there, and from there
   `ssm:StartSession` gives root on the instance: this is a latent AWS Organizations capability

@@ -116,6 +116,29 @@ def test_non_2xx_logs_status_not_url(personal, caplog, status):
     assert BOT not in caplog.text
 
 
+NOTICE = "OFW login is locked, breaker open: OFWLoginError. Fix the credentials or challenge, then send `ofw reset`."
+
+
+def test_send_text_posts_fixed_text_synchronously(personal):
+    sent = []
+    p = telegram_push.TelegramPush(personal, lambda t: t.replace("s3cr3t-value", "[redacted]"),
+                                   post=lambda url, **kw: sent.append((url, kw)) or Resp(200))
+    assert p.send_text(NOTICE) is True
+    ((url, kw),) = sent
+    assert url == f"https://api.telegram.org/bot{BOT}/sendMessage"
+    assert kw["json"] == {"chat_id": 4242, "text": NOTICE} and kw["timeout"] == telegram_push.SEND_TIMEOUT_SECONDS
+    assert p.send_text("x s3cr3t-value") is True and sent[-1][1]["json"]["text"] == "x [redacted]"
+
+
+@pytest.mark.parametrize("post", [lambda url, **kw: Resp(500), lambda url, **kw: 1 / 0])
+def test_send_text_failure_returns_false_and_logs_class_only(personal, caplog, post):
+    with caplog.at_level(logging.INFO, logger="jarvis.telegram_push"):
+        assert telegram_push.TelegramPush(personal, lambda t: t, post=post).send_text(NOTICE) is False
+    (rec,) = [r for r in caplog.records if getattr(r, "jarvis_event", None) == "telegram_push_error"]
+    assert rec.jarvis_fields["error_class"] in ("HTTPStatus", "ZeroDivisionError")
+    assert BOT not in caplog.text and "breaker open" not in caplog.text
+
+
 def test_2xx_is_quiet(personal, caplog):
     with caplog.at_level(logging.INFO, logger="jarvis.telegram_push"):
         telegram_push.TelegramPush(personal, lambda t: t, post=lambda url, **kw: Resp(200),

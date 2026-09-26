@@ -1,5 +1,5 @@
 locals {
-  log_groups = ["/jarvis/work", "/jarvis/personal", "/jarvis/cloud-init"]
+  log_groups = ["/jarvis/work", "/jarvis/personal", "/jarvis/cloud-init", "/jarvis/ofw"]
   topic_arn  = aws_sns_topic.alerts.arn
 
   # DESIGN.md 7.2.
@@ -31,6 +31,28 @@ locals {
       name       = "OfwWatchDisabled"
       default    = "0"
       dimensions = null
+    }
+    # PLAN AD37: ofw-mcp events, shipped from /var/log/jarvis/ofw.jsonl.
+    "jarvis-ofw-login-failures" = {
+      log_group  = "/jarvis/ofw"
+      pattern    = "{ $.event = \"ofw_login_failed\" }"
+      name       = "OfwLoginFailures"
+      default    = "0"
+      dimensions = null
+    }
+    "jarvis-ofw-layout-changed" = {
+      log_group  = "/jarvis/ofw"
+      pattern    = "{ $.event = \"ofw_layout_changed\" }"
+      name       = "OfwLayoutChanged"
+      default    = "0"
+      dimensions = null
+    }
+    "jarvis-heartbeat-ofw" = {
+      log_group  = "/jarvis/ofw"
+      pattern    = "{ ($.event = \"heartbeat\") && ($.mode = \"ofw\") }"
+      name       = "Heartbeat"
+      default    = null
+      dimensions = { Mode = "$.mode" }
     }
   }
 }

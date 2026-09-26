@@ -6,6 +6,8 @@
 # <sso:Set> is arn:aws:iam::ACCT:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_<Set>_*
 # (Identity Center is in us-east-1, so there is no region segment).
 # Amended per PLAN 3.2: W6 carries aws:SourceAccount; P13 and P18 use Null + StringNotEquals.
+# Amended per PLAN AD34/AD37 (DESIGN-IAM.md 3.2 "AD34 deviation"): P2 gains /jarvis/ofw, P8
+# gains jarvis/ofw.
 locals {
   allowlist_patterns = {
     # P1
@@ -31,6 +33,7 @@ locals {
         "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/work:*",
         "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/personal:*",
         "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/cloud-init:*",
+        "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/ofw:*",
       ]
       principals = []
       conditions = []
@@ -109,6 +112,7 @@ locals {
         "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal-??????",
         "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/shared-??????",
         "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/tailscale-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/ofw-??????",
       ]
       principals = []
       conditions = []

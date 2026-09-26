@@ -17,6 +17,19 @@ locals {
       metric  = "OfwWatchDisabled", stat = "Sum", eval = 1, op = "GreaterThanThreshold", threshold = 0
       missing = "notBreaching", dimensions = null, filter = "jarvis-ofw-watch-disabled"
     }
+    # PLAN AD37.
+    "jarvis-heartbeat-ofw" = {
+      metric  = "Heartbeat", stat = "SampleCount", eval = 3, op = "LessThanThreshold", threshold = 1
+      missing = "breaching", dimensions = { Mode = "ofw" }, filter = "jarvis-heartbeat-ofw"
+    }
+    "jarvis-ofw-login-failures" = {
+      metric  = "OfwLoginFailures", stat = "Sum", eval = 1, op = "GreaterThanThreshold", threshold = 0
+      missing = "notBreaching", dimensions = null, filter = "jarvis-ofw-login-failures"
+    }
+    "jarvis-ofw-layout-changed" = {
+      metric  = "OfwLayoutChanged", stat = "Sum", eval = 1, op = "GreaterThanThreshold", threshold = 0
+      missing = "notBreaching", dimensions = null, filter = "jarvis-ofw-layout-changed"
+    }
   }
 
   instance_count = var.instance_enabled ? 1 : 0

@@ -50,7 +50,7 @@ plan: ## envs/prod plan (AWS_PROFILE=$(PROD_AWS_PROFILE)); needs infra/envs/prod
 	$(TF) -chdir=$(INFRA)/envs/prod show -no-color plan.out > $(INFRA)/envs/prod/plan.txt
 	@echo "Review $(INFRA)/envs/prod/plan.txt. The human applies; this target never does."
 
-plan-org: ## org/ plan in the management account (AWS_PROFILE=$(ORG_AWS_PROFILE)); local state (AD36)
+plan-org: ## org/ plan in the management account (AWS_PROFILE=$(ORG_AWS_PROFILE)); local state (AD44)
 	AWS_PROFILE=$(ORG_AWS_PROFILE) $(TF) -chdir=$(INFRA)/org init -input=false -reconfigure
 	AWS_PROFILE=$(ORG_AWS_PROFILE) $(TF) -chdir=$(INFRA)/org plan -input=false -out plan.out
 	$(TF) -chdir=$(INFRA)/org show -no-color plan.out > $(INFRA)/org/plan.txt
@@ -93,13 +93,24 @@ SHA                  ?=
 ROTATE               ?= false
 # H2: per-document timeouts for scripts/ssm-run.sh's poll loop (not the aws CLI's own
 # `wait command-executed`, which is capped at 100s regardless -- too short for a real deploy).
+# `ofw-login` instead sets SSM_RUN_TIMEOUT_S to OFW_WAIT_SECONDS+120 (the human is logging in).
 SSM_DEPLOY_TIMEOUT_S  ?= 1800
 SSM_DEFAULT_TIMEOUT_S ?= 300
+# PLAN.md AD40: which ofw-mcp commit `make release` packages, and the escape hatch that lets a
+# release ship without it (see deps/README.md).
+OFW_MCP_SRC          ?=
+OFW_MCP_SKIP         ?=
+OFW_PORT             ?= 9222
+OFW_WAIT_SECONDS     ?= 900
 
-.PHONY: release deploy status restart secrets-sync sync-agents oauth-login test clean
+.PHONY: help release deploy status restart secrets-sync sync-agents oauth-login ofw-login ofw-reset test clean
 
-release: ## build + upload a release tarball; ARTIFACTS_BUCKET, or the jarvis-artifacts-<account-id> convention
+help: ## list available targets and what each one does
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+release: ## build + upload a release tarball; ARTIFACTS_BUCKET, or the jarvis-artifacts-<account-id> convention; OFW_MCP_SRC/OFW_MCP_SKIP pass through (PLAN.md AD40)
 	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) ARTIFACTS_BUCKET=$(ARTIFACTS_BUCKET) AWS_REGION=$(AWS_REGION) \
+	  OFW_MCP_SRC=$(OFW_MCP_SRC) OFW_MCP_SKIP=$(OFW_MCP_SKIP) \
 	  scripts/release.sh
 
 $(INSTANCE_ID_FILE): ## the running jarvis instance, found by tag (no terraform/state-bucket access needed)
@@ -151,6 +162,28 @@ oauth-login: $(INSTANCE_ID_FILE) ## make oauth-login MODE=work|personal
 	@test -n "$(MODE)" || { echo "usage: make oauth-login MODE=work|personal"; exit 1; }
 	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) JARVIS_INSTANCE_ID_FILE=$(INSTANCE_ID_FILE) \
 	  scripts/oauth-login.sh "$(MODE)"
+
+ofw-login: $(INSTANCE_ID_FILE) ## make ofw-login [OFW_WAIT_SECONDS=900]; SSM port-forward to the instance's Chromium DevTools port, then jarvis-ofw-login
+	@set -euo pipefail; \
+	  id="$$(cat $(INSTANCE_ID_FILE))"; \
+	  fwd_log="$$(mktemp)"; \
+	  echo "== forwarding 127.0.0.1:$(OFW_PORT) to the instance's Chromium DevTools port =="; \
+	  AWS_PROFILE=$(OPERATOR_AWS_PROFILE) $(AWS) ssm start-session --target "$$id" --region $(AWS_REGION) \
+	    --document-name AWS-StartPortForwardingSession \
+	    --parameters "portNumber=$(OFW_PORT),localPortNumber=$(OFW_PORT)" >"$$fwd_log" 2>&1 & \
+	  fwd_pid=$$!; \
+	  trap 'kill $$fwd_pid 2>/dev/null || true; rm -f "$$fwd_log"' EXIT; \
+	  sleep 2; \
+	  echo "== manual steps =="; \
+	  echo "1. Open chrome://inspect in a local Chrome browser."; \
+	  echo "2. Click Configure..., add target 127.0.0.1:$(OFW_PORT), then log in to OFW in the discovered remote tab."; \
+	  echo "3. Waiting up to $(OFW_WAIT_SECONDS)s for jarvis-ofw-login once you are done logging in..."; \
+	  AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) SSM_RUN_TIMEOUT_S=$$(($(OFW_WAIT_SECONDS) + 120)) \
+	    scripts/ssm-run.sh jarvis-ofw-login "$$id" --parameters WaitSeconds=$(OFW_WAIT_SECONDS)
+
+ofw-reset: $(INSTANCE_ID_FILE) ## close the ofw-mcp login breaker (clears a device/MFA challenge lockout)
+	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
+	  scripts/ssm-run.sh jarvis-ofw-reset "$$(cat $(INSTANCE_ID_FILE))" $(SSM_DEFAULT_TIMEOUT_S)
 
 test: ## whole repo suite (tests/ and windows_client/tests/, per pytest.ini)
 	.venv/bin/pytest -q

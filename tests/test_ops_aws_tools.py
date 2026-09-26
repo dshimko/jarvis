@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import re
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -158,6 +159,156 @@ def test_real_repo_mcp_configs_have_no_literal_secrets_from_a_typical_env():
 
 
 # --------------------------------------------------------------------------------------------
+# jarvis-secrets cmd_sync(): AD34's third target, `ofw`. Fakes both the `aws secretsmanager
+# get-secret-value` and the `runuser -u jarvis-<mode> -- jarvis-write-env` subprocess.run calls
+# so this exercises the real cmd_sync() control flow (fetch, validate, pairwise shared_violations,
+# write) without any AWS CLI, systemd, or runuser on this machine.
+# --------------------------------------------------------------------------------------------
+
+def _fake_run_factory(secrets: dict, write_calls: list):
+    """secrets: {secret-name: value-dict-or-None (None = ResourceNotFoundException)}.
+    write_calls collects (user, stdin-text) for every jarvis-write-env shim invocation."""
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:3] == ["aws", "secretsmanager", "get-secret-value"]:
+            name = cmd[cmd.index("--secret-id") + 1]
+            value = secrets.get(name)
+            if value is None:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ResourceNotFoundException")
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(value), stderr="")
+        if cmd[:2] == ["runuser", "-u"] and cmd[-1] == "/opt/jarvis/libexec/jarvis-write-env":
+            write_calls.append((cmd[2], kwargs.get("input")))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+    return fake_run
+
+
+def test_cmd_sync_writes_ofw_via_the_shim_as_jarvis_ofw(monkeypatch):
+    mod = load_module("jarvis_secrets_sync_ofw", JARVIS_SECRETS_PATH)
+    write_calls: list = []
+    secrets = {
+        "jarvis/work": {"WORK_KEY": "work-only-value-aaaa"},
+        "jarvis/personal": {"PERSONAL_KEY": "personal-only-value-bbbb"},
+        "jarvis/shared": {},
+        "jarvis/ofw": {"OFW_USERNAME": "someone", "OFW_PASSWORD": "ofw-only-value-cccc"},
+    }
+    monkeypatch.setattr(mod, "region", lambda: "us-east-1")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run_factory(secrets, write_calls))
+
+    assert mod.cmd_sync() == 0
+    users = [user for user, _ in write_calls]
+    assert users.count("jarvis-work") == 1
+    assert users.count("jarvis-personal") == 1
+    assert users.count("jarvis-ofw") == 1
+    ofw_input = next(text for user, text in write_calls if user == "jarvis-ofw")
+    # ofw-mcp's read_raw_env keeps values byte for byte, so the ofw file is never quoted, while
+    # the mode files stay single-quoted for python-dotenv (L1).
+    assert ofw_input.splitlines() == ["OFW_PASSWORD=ofw-only-value-cccc", "OFW_USERNAME=someone"]
+    work_input = next(text for user, text in write_calls if user == "jarvis-work")
+    assert work_input == "WORK_KEY='work-only-value-aaaa'\n"
+
+
+def test_cmd_sync_pairwise_violation_blocks_all_three_writes_key_names_only(monkeypatch, capsys):
+    mod = load_module("jarvis_secrets_sync_violation", JARVIS_SECRETS_PATH)
+    write_calls: list = []
+    collision = "shared-collision-value-9999"
+    secrets = {
+        "jarvis/work": {"WORK_KEY": "work-only-value-aaaa"},
+        "jarvis/personal": {"PERSONAL_KEY": "personal-only-value-bbbb", "PERSONAL_SECRET": collision},
+        "jarvis/shared": {},
+        # OFW_PASSWORD collides with jarvis/personal's PERSONAL_SECRET -- a pairwise (personal,
+        # ofw) violation that the old work-vs-personal-only check would never have caught.
+        "jarvis/ofw": {"OFW_USERNAME": "someone", "OFW_PASSWORD": collision},
+    }
+    monkeypatch.setattr(mod, "region", lambda: "us-east-1")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run_factory(secrets, write_calls))
+
+    assert mod.cmd_sync() == 1
+    assert write_calls == []  # nothing written for work, personal, or ofw
+
+    out = capsys.readouterr().out
+    assert collision not in out
+    assert "someone" not in out
+    assert "OFW_PASSWORD" in out
+    assert "PERSONAL_SECRET" in out
+
+
+def test_cmd_sync_skips_missing_ofw_secret_and_still_writes_work_and_personal(monkeypatch):
+    # AD34 (amended): a jarvis/ofw with no version yet is skipped, not fatal -- the mode daemons
+    # must not depend on the optional third secret, and ofw-mcp itself refuses to start without
+    # its own env file regardless.
+    mod = load_module("jarvis_secrets_sync_ofw_missing", JARVIS_SECRETS_PATH)
+    write_calls: list = []
+    secrets = {
+        "jarvis/work": {"WORK_KEY": "work-only-value-aaaa"},
+        "jarvis/personal": {"PERSONAL_KEY": "personal-only-value-bbbb"},
+        "jarvis/shared": {},
+        # jarvis/ofw intentionally absent from the dict -> get-secret-value returns
+        # ResourceNotFoundException, i.e. "no version yet".
+    }
+    monkeypatch.setattr(mod, "region", lambda: "us-east-1")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run_factory(secrets, write_calls))
+
+    assert mod.cmd_sync() == 0
+    users = [user for user, _ in write_calls]
+    assert users.count("jarvis-work") == 1
+    assert users.count("jarvis-personal") == 1
+    assert "jarvis-ofw" not in users
+
+
+def test_cmd_sync_ofw_value_colliding_with_a_shared_value_via_merge_blocks_all_writes(monkeypatch, capsys):
+    # AD34 (amended): ofw is compared against each mode's *merged* env (shared included), with
+    # no shared-key exemption -- an ofw value equal to a value that only reached a mode via the
+    # jarvis/shared merge must still be caught, unlike the work-vs-personal check.
+    mod = load_module("jarvis_secrets_sync_ofw_merge_collision", JARVIS_SECRETS_PATH)
+    write_calls: list = []
+    collision = "shared-collision-value-7777"
+    secrets = {
+        "jarvis/work": {"WORK_KEY": "work-only-value-aaaa"},
+        "jarvis/personal": {"PERSONAL_KEY": "personal-only-value-bbbb"},
+        "jarvis/shared": {"K": collision},
+        "jarvis/ofw": {"OFW_USERNAME": "someone", "OFW_PASSWORD": collision},
+    }
+    monkeypatch.setattr(mod, "region", lambda: "us-east-1")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run_factory(secrets, write_calls))
+
+    assert mod.cmd_sync() == 1
+    assert write_calls == []
+
+    out = capsys.readouterr().out
+    assert collision not in out
+    assert "someone" not in out
+    violation_line = next(line for line in out.splitlines() if "shared_violation keys=" in line)
+    reported_keys = violation_line.split("keys=", 1)[1].split(",")
+    assert "OFW_PASSWORD" in reported_keys
+    assert "K" in reported_keys
+
+
+def test_cmd_sync_ofw_key_shadowing_a_shared_key_name_blocks_all_writes(monkeypatch, capsys):
+    # AD34 (amended) shadowed-key check: an ofw key literally named the same as a jarvis/shared
+    # key is a violation regardless of value -- ofw never merges shared, so an identically named
+    # key is never intentional.
+    mod = load_module("jarvis_secrets_sync_ofw_shadow", JARVIS_SECRETS_PATH)
+    write_calls: list = []
+    secrets = {
+        "jarvis/work": {"WORK_KEY": "work-only-value-aaaa"},
+        "jarvis/personal": {"PERSONAL_KEY": "personal-only-value-bbbb"},
+        "jarvis/shared": {"K": "shared-only-value-dddd"},
+        "jarvis/ofw": {"K": "ofw-only-value-eeee"},  # same key name as jarvis/shared's "K"
+    }
+    monkeypatch.setattr(mod, "region", lambda: "us-east-1")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run_factory(secrets, write_calls))
+
+    assert mod.cmd_sync() == 1
+    assert write_calls == []
+
+    out = capsys.readouterr().out
+    assert "shared-only-value-dddd" not in out
+    assert "ofw-only-value-eeee" not in out
+    violation_line = next(line for line in out.splitlines() if "shared_violation keys=" in line)
+    assert "K" in violation_line.split("keys=", 1)[1].split(",")
+
+
+# --------------------------------------------------------------------------------------------
 # jarvis-logfilter: forwards only JSON objects, drops and counts everything else, and recursively
 # strips the AD11 content-carrying keys (case-insensitive) as a second layer.
 # --------------------------------------------------------------------------------------------
@@ -188,6 +339,16 @@ def test_logfilter_scrub_is_case_insensitive_and_recursive_into_lists():
     obj = {"event": "x", "Body": "secret", "list": [{"TEXT": "s"}, {"keep": "yes"}]}
     scrubbed = mod.scrub(obj)
     assert scrubbed == {"event": "x", "list": [{}, {"keep": "yes"}]}
+
+
+def test_logfilter_scrub_drops_ad37_ofw_content_keys():
+    mod = load_module("jarvis_logfilter_scrub_ofw", LOGFILTER_PATH)
+    obj = {
+        "event": "ofw_call", "Title": "x", "description": "y", "Sender": "z",
+        "recipients": ["a"], "thread": [], "messages": [], "events": [], "expenses": [],
+        "entries": [], "attachments": [{"name": "f", "size": 1}], "status": "ok",
+    }
+    assert mod.scrub(obj) == {"event": "ofw_call", "status": "ok"}
 
 
 # --------------------------------------------------------------------------------------------

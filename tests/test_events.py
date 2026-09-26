@@ -156,10 +156,10 @@ def test_run_job_publishes_schedule_done(modes, monkeypatch):
     monkeypatch.setattr(main.brain, "ask_detailed", lambda mode, prompt: main.brain.Answer("Claude Code failed", False))
     main.run_job(modes["work"], "end-of-day", Bus())
     monkeypatch.setattr(main.brain, "ask_detailed", lambda mode, prompt: 1 / 0)
-    main.run_job(modes["personal"], "ofw-check", Bus())
+    main.run_job(modes["personal"], "evening-review", Bus())
     assert published == [("schedule_done", {"mode": "work", "job": "morning-brief", "ok": True}),
                          ("schedule_done", {"mode": "work", "job": "end-of-day", "ok": False}),
-                         ("schedule_done", {"mode": "personal", "job": "ofw-check", "ok": False})]
+                         ("schedule_done", {"mode": "personal", "job": "evening-review", "ok": False})]
 
 
 def test_schedules_registered(modes):
@@ -167,7 +167,9 @@ def test_schedules_registered(modes):
     s.start(paused=True)
     try:
         jobs = s.get_jobs()
-        assert {j.args[1] for j in jobs} == {"morning-brief", "end-of-day", "evening-review", "ofw-check"}
+        # AD39: the 12:00 ofw-check schedule is gone; OFW runs on the Gmail watcher's /ofw-notify only.
+        assert {j.args[1] for j in jobs} == {"morning-brief", "end-of-day", "evening-review"}
+        assert {j.args[1] for j in jobs if j.args[0].name == "personal"} == {"evening-review"}
         assert all(j.misfire_grace_time == 3600 and j.coalesce for j in jobs)
     finally:
         s.shutdown(wait=False)

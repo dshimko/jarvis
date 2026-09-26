@@ -1,5 +1,6 @@
 locals {
-  value_secrets = [for k in ["work", "personal", "shared", "tailscale"] : var.value_secret_arns[k]]
+  # AD34: "ofw" is a recorded deviation from brief section 2 (like G4); DESIGN-IAM.md 3.2.
+  value_secrets = [for k in ["work", "personal", "shared", "tailscale", "ofw"] : var.value_secret_arns[k]]
   token_secrets = [for k in ["work", "personal"] : var.token_secret_arns[k]]
   artifacts_arn = "arn:aws:s3:::${var.artifacts_bucket}"
   ssm_core_arn  = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"

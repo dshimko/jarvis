@@ -162,7 +162,7 @@ rm -rf "$tmp_tar"
 chmod 0700 "$BOOTSTRAP_DIR"
 chmod 0700 "$BOOTSTRAP_DIR/bootstrap.sh"
 
-log "persisting region for ops/aws tools (AD34: region literals leave every script)"
+log "persisting region for ops/aws tools (AD42: region literals leave every script)"
 install -d -m 0755 /etc/jarvis
 printf '%s' "$AWS_REGION" > /etc/jarvis/region
 chmod 0644 /etc/jarvis/region

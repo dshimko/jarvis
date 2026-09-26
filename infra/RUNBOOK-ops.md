@@ -256,7 +256,7 @@ always the last root torn down:
 ```
 AWS_PROFILE=sparko terraform -chdir=infra/org destroy
 ```
-One `destroy` does the whole thing (AD35): it detaches every SCP (`jarvis-org-guard`, and
+One `destroy` does the whole thing (AD43): it detaches every SCP (`jarvis-org-guard`, and
 `jarvis-guardrail`/`jarvis-region-deny` if either was ever attached) from the `jarvis` OU, closes
 the `jarvis-prod` account (`close_on_deletion = true`, `infra/org/main.tf`), and deletes the OU.
 SCP detachment is not a separate step -- `terraform destroy` removes all of `org/`'s resources

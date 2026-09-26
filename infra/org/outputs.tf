@@ -4,7 +4,7 @@ output "account_id" {
 }
 
 output "ou_id" {
-  description = "Id of the jarvis OU that holds jarvis-prod and carries the SCPs (AD35)."
+  description = "Id of the jarvis OU that holds jarvis-prod and carries the SCPs (AD43)."
   value       = aws_organizations_organizational_unit.jarvis.id
 }
 

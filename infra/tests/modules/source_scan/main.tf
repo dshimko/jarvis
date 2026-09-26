@@ -88,6 +88,12 @@ locals {
     for m in regexall("resource\\s+\"(aws_iam_role_policy_attachment|aws_ssoadmin_managed_policy_attachment)\"\\s+\"([a-z0-9_]+)\"", t) : "${f}:${m[0]}.${m[1]}"
   ]]))
 
+  # ofw.tftest.hcl inventory: every secret, log group, metric filter, and alarm resource block, so
+  # a resource added outside the tested for_each maps cannot slip past the runtime checks.
+  monitoring_resources = sort(flatten([for f, t in local.text : [
+    for m in regexall("resource\\s+\"(aws_secretsmanager_secret|aws_cloudwatch_log_group|aws_cloudwatch_log_metric_filter|aws_cloudwatch_metric_alarm)\"\\s+\"([a-z0-9_]+)\"", t) : "${f}:${m[0]}.${m[1]}"
+  ]]))
+
   security_group_resources = sort(flatten([for f, t in local.text : [
     for m in regexall("resource\\s+\"(aws_security_group|aws_default_security_group)\"\\s+\"([a-z0-9_]+)\"", t) : "${f}:${m[0]}.${m[1]}"
   ]]))

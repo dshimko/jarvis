@@ -39,6 +39,9 @@ SYSTEM_TREES = (Path("/proc"), Path("/run/user"), Path("/dev/shm"))
 # Own-vault paths the agent must not write: Claude config, MCP config, Obsidian plugins/config, git config/hooks.
 OWN_WRITE_DENY_TREES = (".claude", ".obsidian", ".git")
 GIT_RISKY = ("fsmonitor", "hookspath")
+# OFW write-token control tools (AD38/AD39): code-handled in ofw_control only. Denied in every session as
+# defense in depth (the read token cannot call them either); never write_tools, so no outbox item can name them.
+CONTROL_TOOLS = ("mcp__ofw__confirm_privileged", "mcp__ofw__reset_breaker")
 RISKY_SETTINGS = {"hooks", "permissions", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport",
                   "otelHeadersHelper", "statusLine", "env", "enableAllProjectMcpServers", "enabledMcpjsonServers"}
 
@@ -83,7 +86,8 @@ def tool_policy(mode: Mode) -> tuple[list[str], list[str]]:
     allowed = [f"Read({_abs(mode.vault)}/**)", f"Edit({_abs(mode.vault)}/**)", "Glob", "Grep"] + list(mode.read_tools)
     own_config = [r for d in OWN_WRITE_DENY_TREES for r in _deny_tree(mode.vault / d, tools=("Edit",))] \
         + _deny_file(mode.vault / ".mcp.json", tools=("Edit",))
-    denied = secret_denies(mode) + own_config + list(mode.write_tools) + ["Bash", "WebFetch", "WebSearch"]
+    denied = secret_denies(mode) + own_config + list(mode.write_tools) + list(CONTROL_TOOLS) \
+        + ["Bash", "WebFetch", "WebSearch"]
     return allowed, list(dict.fromkeys(denied))
 
 
@@ -187,7 +191,8 @@ def plan_build(mode: Mode, repo_key: str, task_text: str) -> str:
     repo = mode.repos[repo_key]
     cmd = ["claude", "-p", task_text, "--output-format", "json", "--permission-mode", "plan",
            "--mcp-config", str(mode.mcp_config), "--strict-mcp-config", "--settings", NO_HOOKS,
-           "--disallowedTools", ",".join(secret_denies(mode) + list(mode.write_tools) + ["WebFetch", "WebSearch"])]
+           "--disallowedTools", ",".join(secret_denies(mode) + list(mode.write_tools) + list(CONTROL_TOOLS)
+                                         + ["WebFetch", "WebSearch"])]
     res = _run(cmd, repo, mode.subprocess_env(), 1800)
     if isinstance(res, str):
         return res

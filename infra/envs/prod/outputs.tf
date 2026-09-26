@@ -29,8 +29,13 @@ output "bootstrap_key" {
 }
 
 output "secret_names" {
-  description = "The six secrets (the human populates jarvis/work, personal, shared, tailscale)."
+  description = "The seven secrets (the human populates jarvis/work, personal, shared, tailscale, ofw)."
   value       = module.secrets.secret_names
+}
+
+output "observability_inventory" {
+  description = "Log groups, metric filters, and log alarms as created (read by infra/tests)."
+  value       = module.observability.inventory
 }
 
 output "alert_topic_arn" {

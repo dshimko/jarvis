@@ -62,8 +62,9 @@ def check_shared_sections(cfg: dict, module_cfg: dict) -> None:
                          "set JARVIS_DEPLOYMENT instead of --profile")
 
 
-def _start_watcher(mode: Mode, cfg: dict) -> gmail_watch.Watcher:
-    w = gmail_watch.Watcher(mode, cfg)
+def _start_watcher(mode: Mode, cfg: dict, notify=None) -> gmail_watch.Watcher:
+    """notify: the Telegram push's content-free send_text, for the OFW breaker notice (AD39)."""
+    w = gmail_watch.Watcher(mode, cfg, notify=notify)
     w.start()
     return w
 
@@ -74,11 +75,12 @@ def start_services(mode: Mode, cfg: dict, bus: events.EventBus, redact, handle, 
         if channels_on:
             channels.start_slack(mode, handle)
         return
+    push = None
     if channels_on:
         channels.start_telegram(mode, handle)
-        telegram_push.start(mode, bus, redact)
+        push = telegram_push.start(mode, bus, redact)
     if cfg.get("ofw_watch") is not None:
-        _start_watcher(mode, cfg["ofw_watch"])
+        _start_watcher(mode, cfg["ofw_watch"], notify=push.send_text if push else None)
 
 
 def main(argv: list[str] | None = None) -> None:

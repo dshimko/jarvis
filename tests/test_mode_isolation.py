@@ -151,6 +151,19 @@ def test_plan_build_scoped(modes, runs, tmp_path):
     assert flag(cmd, "--permission-mode") == "plan"
     assert f"Read(/{modes['personal'].vault}/**)" in flag(cmd, "--disallowedTools")
     assert not set(runs[0]["env"].values()) & set(PERSONAL_SECRETS)
+    assert set(brain.CONTROL_TOOLS) <= set(flag(cmd, "--disallowedTools").split(","))
+
+
+def test_ofw_control_tools_denied_in_personal_session(modes, runs, jev_scores):
+    """AD38/AD39 defense in depth: the write-token control tools are denied in every vault session and
+    are never write_tools (the executor must not accept an outbox item for them)."""
+    assert brain.CONTROL_TOOLS == ("mcp__ofw__confirm_privileged", "mcp__ofw__reset_breaker")
+    brain.ask(modes["personal"], "hi")
+    cmd = runs[0]["cmd"]
+    allowed, denied = flag(cmd, "--allowedTools").split(","), flag(cmd, "--disallowedTools").split(",")
+    for tool in brain.CONTROL_TOOLS:
+        assert tool in denied and tool not in allowed
+        assert tool not in modes["personal"].write_tools and tool not in modes["personal"].read_tools
 
 
 def test_timeout_is_reported(modes, monkeypatch):

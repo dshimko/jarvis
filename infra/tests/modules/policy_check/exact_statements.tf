@@ -1,9 +1,11 @@
 # Exact-match table for every statement WITHOUT a wildcard resource (Gate 2 M1): trust
 # policies, the instance role's non-wildcard statements, the permission sets, the SNS topic, and
 # the remaining bucket statements. With allowlist_*.tf this pins every statement in every policy:
-# a statement in neither table fails. Values use the fixed test identities; the six secret ARNs
-# are per-instance overrides in iam_wildcards.tftest.hcl (suffixes AAAAAA to FFFFFF).
+# a statement in neither table fails. Values use the fixed test identities; the seven secret ARNs
+# are per-instance overrides in iam_wildcards.tftest.hcl (suffixes AAAAAA to GGGGGG).
 # X6 EncryptApiTokens includes kms:Decrypt (Phase 2 amendment K1, DESIGN-IAM.md 3.2).
+# X3 and X4 include jarvis/ofw (PLAN AD34, DESIGN-IAM.md 3.2 "AD34 deviation"): five value ARNs.
+# X12 includes jarvis-ofw-login and jarvis-ofw-reset (PLAN AD40).
 locals {
   exact_statements = {
     # X1
@@ -39,6 +41,7 @@ locals {
         "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal-BBBBBB",
         "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/shared-CCCCCC",
         "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/tailscale-DDDDDD",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/ofw-GGGGGG",
       ]
       principals = []
       conditions = []
@@ -58,6 +61,7 @@ locals {
           "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal-BBBBBB",
           "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/shared-CCCCCC",
           "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/tailscale-DDDDDD",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/ofw-GGGGGG",
         ] },
       ]
     }
@@ -166,6 +170,8 @@ locals {
         "arn:aws:ssm:${var.region}:111122223333:document/jarvis-restart",
         "arn:aws:ssm:${var.region}:111122223333:document/jarvis-secrets-sync",
         "arn:aws:ssm:${var.region}:111122223333:document/jarvis-status",
+        "arn:aws:ssm:${var.region}:111122223333:document/jarvis-ofw-login",
+        "arn:aws:ssm:${var.region}:111122223333:document/jarvis-ofw-reset",
       ]
       principals = []
       conditions = []

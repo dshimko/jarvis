@@ -27,7 +27,7 @@ Absolute rules:
   Pin providers with `~>` and commit `.terraform.lock.hcl` (run `terraform providers lock` for
   `darwin_arm64` and `linux_amd64`).
 - Tags via `default_tags` on the provider: `app=jarvis`, `env=prod`, `owner=dushan`.
-- Region variable `aws_region` default `us-east-1` (AD34, supersedes AD20); instance type variable
+- Region variable `aws_region` default `us-east-1` (AD42, supersedes AD20); instance type variable
   with the arm64/x86_64 AMI selection derived from it.
 
 Layout (brief section 2, AD18, AD19). Each module has `main.tf`, `variables.tf`, `outputs.tf`,

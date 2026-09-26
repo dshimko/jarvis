@@ -9,7 +9,10 @@ locals {
 
   # AD19: bodies from ops/aws/ssm/<name>.sh.
   ssm_documents = {
-    for name in ["jarvis-deploy", "jarvis-restart", "jarvis-secrets-sync", "jarvis-status"] :
+    for name in [
+      "jarvis-deploy", "jarvis-restart", "jarvis-secrets-sync", "jarvis-status",
+      "jarvis-ofw-login", "jarvis-ofw-reset", # PLAN AD40
+    ] :
     name => file("${local.repo_root}/ops/aws/ssm/${name}.sh")
   }
 }

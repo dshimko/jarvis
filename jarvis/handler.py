@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging, re
 from dataclasses import dataclass
 from typing import Callable
-from . import brain, outbox, router
+from . import brain, ofw_control, outbox, router
 from .logsetup import log_event
 from .modes import Mode, make_redactor
 
@@ -12,6 +12,14 @@ APPROVE = re.compile(r"^(approve|send)\s+([\w-]+)(?:\s+([0-9a-fA-F]{8}))?(\s+rec
 PENDING = {"outbox", "pending", "what's pending", "whats pending", "what is pending", "anything pending"}
 TRAILING = re.compile(r"[\s.?!,;:]+$")
 VOICE_APPROVE_REFUSAL = "Voice approval uses the read-back flow in the tray app. Nothing was sent."
+# AD38/AD39: OFW control commands, personal mode and text channels only, handled here and never by the model.
+# PRIVILEGED_OK and OFW_RESET are used with fullmatch; [0-9] because \d matches any Unicode digit.
+PRIVILEGED_OK = re.compile(r"privileged ok ([0-9]{1,20})", re.I)
+PRIVILEGED_PREFIX = re.compile(r"privileged\s*ok", re.I)             # used with match: any such prefix
+OFW_RESET = re.compile(r"ofw reset", re.I)
+OFW_VOICE_REFUSAL = "OFW commands work only in Telegram, never by voice. Nothing was sent."
+OFW_PERSONAL_ONLY = "OFW commands are personal-mode only."
+OFW_NO_WRITE_TOKEN = "OFW write token not configured"
 NOT_SERVED = "That is a {mode} request; this Jarvis serves {served}. Confirm to send it to {mode}."
 
 
@@ -54,9 +62,31 @@ def _approve(mode: Mode, item_id: str, code: str | None, reconfirm: bool) -> str
         return f"Blocked {item_id}: internal error"
 
 
+def _ofw_command(mode: Mode, norm: str, channel: str) -> str | None:
+    """`privileged ok <id>` and `ofw reset`. Replies carry only the id and the server's status word."""
+    is_privileged, is_reset = bool(PRIVILEGED_PREFIX.match(norm)), bool(OFW_RESET.fullmatch(norm))
+    if not (is_privileged or is_reset):
+        return None
+    if channel == "voice":
+        return OFW_VOICE_REFUSAL
+    if mode.name != ofw_control.OFW_MODE:
+        return OFW_PERSONAL_ONLY
+    m = PRIVILEGED_OK.fullmatch(norm)
+    if is_privileged and not m:
+        return ofw_control.BAD_ID_REFUSAL              # the text never reaches the model
+    if not ofw_control.has_write_token(mode):
+        return OFW_NO_WRITE_TOKEN
+    if m:
+        return f"Privileged item {m.group(1)}: {ofw_control.confirm_privileged(mode, m.group(1))}."
+    return f"OFW reset: {ofw_control.reset_breaker(mode)}."
+
+
 def _control(mode: Mode, text: str, channel: str) -> str | None:
     """Returns a reply for a control command, or None when the text is not one."""
     norm = normalize(text)
+    ofw = _ofw_command(mode, norm, channel)
+    if ofw is not None:
+        return ofw
     if norm.lower() in PENDING:
         return _pending(mode)
     if norm.lower().startswith("read "):
