@@ -404,5 +404,14 @@ acceptance checklist. Item 6 (cost under $60) is verified in DESIGN.md during Ph
 - `[!]` Create the IAM Identity Center permission set for `jarvis-prod` (SSM, Secrets Manager read
   on the two token secrets, S3 write on the artifacts bucket). Terraform in `org/` proposes it;
   the human applies.
-- `[!]` After `org/` apply: configure `AWS_PROFILE=jarvis-prod`, run `make plan-bootstrap`, apply,
-  then `make plan`, review, apply, then follow the runbook.
+- `[x]` `org/` applied 2026-09-25: account `jarvis-prod` = `189923010921` in OU
+  `ou-2ela-hq4rr1ti`, SCPs `jarvis-org-guard` and `jarvis-guardrail` attached to the OU.
+  Local state at `infra/org/terraform.tfstate` (gitignored; the human backs it up).
+- `[x]` Identity Center users created 2026-09-26 with the management profile (`demo` is
+  denied `identitystore:CreateUser`): `dushan` = `c49864b8-30d1-7041-4e96-84d397fbdcb5`,
+  `jarvis-workstation` = `f4887488-1091-703b-1f88-a8a82acbaa28`. `org.auto.tfvars` now sets
+  `create_permission_sets = true` with both ids; the second `org/` plan is 9 to add.
+- `[!]` Apply the second `org/` plan (permission sets and assignments), then in the console send
+  each new user a password-reset email (API-created users have no password yet).
+- `[!]` Then `aws configure sso --profile jarvis-prod` (JarvisAdmin) and `--profile
+  jarvis-operator`, `make plan-bootstrap`, apply, `make plan`, review, apply, then the runbook.
