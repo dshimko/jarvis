@@ -8,15 +8,17 @@ client secrets JSON comes from GMAIL_WATCH_CLIENT_SECRETS (the personal env file
 in a 0600 temp file for the flow.
 
 At runtime a daemon thread lists message ids matching `ofw_watch.query` every `ofw_watch.poll_minutes`. The
-list call requests `messages/id` only: no bodies, no snippets, no headers. New ids trigger one
-`/ofw-check` vault command (the coparent agent drafts into outbox/). Gmail is never modified; dedup is the
-local ~/.jarvis/ofw_watch_seen.json. Errors log event=ofw_watch_error with error_class only.
+list call requests `messages/id` only: no bodies, no snippets, no headers. For each new id one get() with
+format=minimal and fields=id,internalDate reads the arrival time (AD39). A poll with new ids runs one
+`/ofw-notify <since>` vault command, `since` being the earliest new internalDate minus 15 minutes (now minus
+15 minutes when none could be read), then checks the OFW breaker (ofw_breaker). Gmail is never modified;
+dedup is the local ~/.jarvis/ofw_watch_seen.json. Errors log event=ofw_watch_error with error_class only.
 """
 from __future__ import annotations
-import argparse, json, logging, os, sys, tempfile, threading, time
+import argparse, datetime as dt, json, logging, math, os, sys, tempfile, threading, time
 from pathlib import Path
 from typing import Callable
-from . import brain, ledger, paths
+from . import brain, ledger, ofw_breaker, ofw_control, paths
 from .logsetup import log_event
 
 log = logging.getLogger(__name__)
@@ -30,7 +32,10 @@ DEFAULT_QUERY = "from:@ourfamilywizard.com is:unread newer_than:2d"
 LIST_FIELDS = "messages/id"
 MAX_RESULTS = 100
 SEEN_RETENTION_SECONDS = 14 * 24 * 3600
-OFW_CHECK = "/ofw-check"
+GET_FORMAT, GET_FIELDS = "minimal", "id,internalDate"
+OFW_NOTIFY = "/ofw-notify"
+NOTIFY_LOOKBACK_MINUTES = 15
+MS_PER_SECOND = 1000
 WATCH_MODE = "personal"
 
 
@@ -57,9 +62,27 @@ def list_ids(service, query: str) -> list[str]:
     return [str(m["id"]) for m in resp.get("messages", []) if isinstance(m, dict) and m.get("id")]
 
 
+def internal_date(service, msg_id: str) -> float | None:
+    """The message's arrival time (epoch seconds) from id and internalDate only, or None if unusable."""
+    resp = service.users().messages().get(userId="me", id=msg_id, format=GET_FORMAT,
+                                          fields=GET_FIELDS).execute() or {}
+    try:
+        seconds = int(str(resp.get("internalDate"))) / MS_PER_SECOND
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return seconds if seconds > 0 and math.isfinite(seconds) else None
+
+
+def since_iso(earliest: float) -> str:
+    """ISO 8601 UTC with offset, NOTIFY_LOOKBACK_MINUTES before earliest (for example 2026-09-25T14:03:00+00:00)."""
+    at = dt.datetime.fromtimestamp(earliest, tz=dt.timezone.utc) - dt.timedelta(minutes=NOTIFY_LOOKBACK_MINUTES)
+    return at.isoformat(timespec="seconds")
+
+
 class Watcher(threading.Thread):
     def __init__(self, mode, cfg: dict | None, ask: Callable = None, service_factory: Callable | None = None,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time, status: Callable | None = None,
+                 notify: Callable[[str], bool] | None = None):
         super().__init__(daemon=True, name="ofw-watch")
         cfg = cfg or {}
         self.mode, self.clock = mode, clock
@@ -68,6 +91,7 @@ class Watcher(threading.Thread):
         self._ask = ask or brain.ask_detailed
         self._factory = service_factory or (lambda: load_service(token_path()))
         self._service = None
+        self._breaker = ofw_breaker.BreakerNotifier(status or (lambda m: ofw_control.status(m)), notify)
         self._halt = threading.Event()
 
     # ---- seen ids: {id: first_seen_epoch} ----
@@ -101,27 +125,49 @@ class Watcher(threading.Thread):
             ids = list_ids(self._service, self.query)
         except Exception as e:
             log_event(log, "ofw_watch_error", logging.ERROR, error_class=type(e).__name__)
+            self._retry_breaker()
             return 0
         seen = self._load_seen()
         new = [i for i in ids if i not in seen]
         if not new:
+            self._retry_breaker()
             return 0
         now = self.clock()
-        self._save_seen({**seen, **{i: now for i in new}})       # seen first: a failing check never loops
-        self._check(len(new))
+        self._save_seen({**seen, **{i: now for i in new}})       # seen first: a failing notify never loops
+        self._notify(len(new), self._since(new, now))
+        self._breaker.check(self.mode)
         return len(new)
 
-    def _check(self, count: int) -> None:
+    def _retry_breaker(self) -> None:
+        """A breaker notice whose push failed is retried every poll, so a Telegram outage delays it by one
+        poll interval rather than until the next OFW email."""
+        if self._breaker.pending:
+            self._breaker.check(self.mode)
+
+    def _since(self, new: list[str], now: float) -> str:
+        """Earliest readable internalDate of the new ids; a failed get() for one id only drops that id."""
+        dates = []
+        for msg_id in new:
+            try:
+                date = internal_date(self._service, msg_id)
+            except Exception as e:
+                log_event(log, "ofw_watch_error", logging.ERROR, error_class=type(e).__name__)
+                continue
+            if date is not None:
+                dates.append(date)
+        return since_iso(min(dates) if dates else now)
+
+    def _notify(self, count: int, since: str) -> None:
         started = time.monotonic()
         try:
-            ok = self._ask(self.mode, OFW_CHECK).ok
+            ok = self._ask(self.mode, f"{OFW_NOTIFY} {since}").ok
         except Exception as e:
             log_event(log, "ofw_watch_error", logging.ERROR, error_class=type(e).__name__)
             return
         if not ok:
-            log_event(log, "ofw_watch_error", logging.ERROR, error_class="OfwCheckFailed")
+            log_event(log, "ofw_watch_error", logging.ERROR, error_class="OfwNotifyFailed")
             return
-        log_event(log, "ofw_watch_check", count=count, duration_ms=int((time.monotonic() - started) * 1000))
+        log_event(log, "ofw_watch_notify", count=count, duration_ms=int((time.monotonic() - started) * 1000))
 
     def run(self) -> None:
         if not token_path().is_file():

@@ -62,7 +62,7 @@ always writes `profile: aws` explicitly unless run with `-ClientProfile wsl`.
 | `api_url_work` / `api_url_personal` | `http://localhost:8781` / `:8782` | Per-mode daemon URLs (one daemon per mode everywhere, PLAN.md AD4/AD13); `install.ps1` (aws profile) writes `http://jarvis:8781` / `:8782`. |
 | `token_source` | `file` | `file` (below) or `secretsmanager` (aws profile). |
 | `aws_profile` | `""` | IAM Identity Center profile (JarvisClient permission set) for `aws secretsmanager get-secret-value`; aws profile only. |
-| `aws_region` | `us-east-1` | Region passed as `--region` on every `aws secretsmanager get-secret-value` call (PLAN.md AD34); aws profile only. |
+| `aws_region` | `us-east-1` | Region passed as `--region` on every `aws secretsmanager get-secret-value` call (PLAN.md AD42); aws profile only. |
 | `token_secret_work` / `token_secret_personal` | `jarvis/work/api-token` / `jarvis/personal/api-token` | Secrets Manager secret ids; aws profile only. |
 | `api_url` | `http://localhost:8765` | Legacy single-daemon URL; kept only so a pre-existing file round-trips, no longer read by the two-daemon code path. |
 | `token_path` | `%LOCALAPPDATA%\Jarvis\api_token` | Used when `token_source: file`. Re-read on every request/reconnect. The same file backs both modes' `FileToken`, a pre-existing limitation of the local/wsl token-copy path (see `jarvis.api.copy_token_to_windows`), not something this client can fix on its own. |

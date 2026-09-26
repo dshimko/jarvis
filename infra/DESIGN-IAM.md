@@ -30,10 +30,12 @@ Managed attachment: `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore` (brie
 ```json
 {"Version":"2012-10-17","Statement":[
  {"Sid":"ReadModeSecrets","Effect":"Allow","Action":"secretsmanager:GetSecretValue",
-  "Resource":["<secret:jarvis/work>","<secret:jarvis/personal>","<secret:jarvis/shared>","<secret:jarvis/tailscale>"]},
+  "Resource":["<secret:jarvis/work>","<secret:jarvis/personal>","<secret:jarvis/shared>","<secret:jarvis/tailscale>",
+              "<secret:jarvis/ofw>"]},
  {"Sid":"DecryptModeSecrets","Effect":"Allow","Action":"kms:Decrypt","Resource":"<key:jarvis>",
   "Condition":{"StringEquals":{"kms:ViaService":"secretsmanager.us-east-1.amazonaws.com",
-   "kms:EncryptionContext:SecretARN":["<secret:jarvis/work>","<secret:jarvis/personal>","<secret:jarvis/shared>","<secret:jarvis/tailscale>"]}}},
+   "kms:EncryptionContext:SecretARN":["<secret:jarvis/work>","<secret:jarvis/personal>","<secret:jarvis/shared>","<secret:jarvis/tailscale>",
+    "<secret:jarvis/ofw>"]}}},
  {"Sid":"PublishApiTokens","Effect":"Allow","Action":"secretsmanager:PutSecretValue",
   "Resource":["<secret:jarvis/work/api-token>","<secret:jarvis/personal/api-token>"]},
  {"Sid":"EncryptApiTokens","Effect":"Allow","Action":["kms:GenerateDataKey","kms:Decrypt"],"Resource":"<key:jarvis>",
@@ -42,9 +44,10 @@ Managed attachment: `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore` (brie
  {"Sid":"DenyOffInstance","Effect":"Deny","Action":"*","Resource":"*",
   "Condition":{"NotIpAddress":{"aws:SourceIp":"<eip>/32"},"Bool":{"aws:ViaAWSService":"false"}}}]}
 ```
-- ReadModeSecrets: `jarvis-secrets sync` and the Tailscale join read exactly the brief's four.
+- ReadModeSecrets: `jarvis-secrets sync` and the Tailscale join read exactly the brief's four,
+  plus `jarvis/ofw` (AD34 deviation, see below).
 - DecryptModeSecrets: Secrets Manager decrypts with the CMK on the caller's behalf; the context
-  pins it to those four secrets (tighter than the brief's bare `kms:Decrypt`).
+  pins it to those five secrets (tighter than the brief's bare `kms:Decrypt`).
 - PublishApiTokens: AD6 deviation, see below.
 - EncryptApiTokens: `PutSecretValue` on a CMK secret needs `GenerateDataKey` and `Decrypt`; pinned
   to the two token secrets. (Phase 2 amendment K1: `kms:Decrypt` added, same context pin.)
@@ -67,7 +70,15 @@ client can read it with the human's SSO profile. A copy into Secrets Manager is 
 `PutSecretValue` call, and on a CMK-encrypted secret that call makes Secrets Manager call
 `kms:GenerateDataKey` and `kms:Decrypt` as the caller (Phase 2 amendment K1: `kms:Decrypt` added).
 Without these two statements brief 4.3 cannot work. Both are
-scoped to the two token secret ARNs; the role cannot write the four value secrets.
+scoped to the two token secret ARNs; the role cannot write the five value secrets.
+
+**AD34 deviation (PLAN 3.3).** Brief 2 lists four value secrets for `GetSecretValue`. The OFW MCP
+server runs as a third OS user and needs its own env file, which root `jarvis-secrets sync` writes
+from `jarvis/ofw` (credentials and the two token hashes; set by the human). ReadModeSecrets and
+the DecryptModeSecrets context each gain exactly that one ARN: seven secrets in total, five read,
+two written. The same kind of deviation as G4/AD6. JarvisOperator's PutValueSecrets (3.12) gains
+`jarvis/ofw-??????` so the human can set it with the operator profile, and its CommandDocuments
+gains the two AD40 documents; DESIGN.md 4.2 rows P2 and P8 change accordingly (38 rows still).
 
 `jarvis-artifacts`:
 ```json
@@ -93,13 +104,14 @@ scoped to the two token secret ARNs; the role cannot write the four value secret
 {"Version":"2012-10-17","Statement":[
  {"Sid":"WriteJarvisLogs","Effect":"Allow","Action":["logs:CreateLogStream","logs:PutLogEvents","logs:DescribeLogStreams"],
   "Resource":["arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/work:*","arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/personal:*",
-              "arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/cloud-init:*"]},
+              "arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/cloud-init:*","arn:aws:logs:us-east-1:ACCT:log-group:/jarvis/ofw:*"]},
  {"Sid":"PutMetricDataJarvisNamespace","Effect":"Allow","Action":"cloudwatch:PutMetricData","Resource":"*",
   "Condition":{"StringEquals":{"cloudwatch:namespace":"Jarvis"}}},
  {"Sid":"DenyOffInstance","Effect":"Deny","Action":"*","Resource":"*",
   "Condition":{"NotIpAddress":{"aws:SourceIp":"<eip>/32"},"Bool":{"aws:ViaAWSService":"false"}}}]}
 ```
-- WriteJarvisLogs: the CloudWatch agent writes streams into the three pre-created groups. There is
+- WriteJarvisLogs: the CloudWatch agent writes streams into the four pre-created groups
+  (`/jarvis/ofw` added by PLAN AD37; the list is the observability `log_group_names` output). There is
   no `logs:CreateLogGroup`.
 - PutMetricDataJarvisNamespace: the agent's `disk_used_percent`. The action has no resource ARN;
   the namespace condition is the constraint (brief 2).
@@ -313,7 +325,8 @@ JarvisOperator and JarvisAdmin and is not signed in on the workstation.
               "arn:aws:ssm:us-east-1:ACCT:document/SSM-SessionManagerRunShell"]},
  {"Sid":"CommandDocuments","Effect":"Allow","Action":"ssm:SendCommand",
   "Resource":["arn:aws:ssm:us-east-1:ACCT:document/jarvis-deploy","arn:aws:ssm:us-east-1:ACCT:document/jarvis-restart",
-              "arn:aws:ssm:us-east-1:ACCT:document/jarvis-secrets-sync","arn:aws:ssm:us-east-1:ACCT:document/jarvis-status"]},
+              "arn:aws:ssm:us-east-1:ACCT:document/jarvis-secrets-sync","arn:aws:ssm:us-east-1:ACCT:document/jarvis-status",
+              "arn:aws:ssm:us-east-1:ACCT:document/jarvis-ofw-login","arn:aws:ssm:us-east-1:ACCT:document/jarvis-ofw-reset"]},
  {"Sid":"OwnSessionsOnly","Effect":"Allow","Action":["ssm:TerminateSession","ssm:ResumeSession"],
   "Resource":"arn:aws:ssm:us-east-1:ACCT:session/*"},
  {"Sid":"SsmAndEc2ReadOnly","Effect":"Allow","Action":["ssm:DescribeInstanceInformation","ssm:GetCommandInvocation",
@@ -324,7 +337,8 @@ JarvisOperator and JarvisAdmin and is not signed in on the workstation.
   "Condition":{"StringLike":{"s3:prefix":["releases/*"]}}},
  {"Sid":"PutValueSecrets","Effect":"Allow","Action":["secretsmanager:PutSecretValue","secretsmanager:DescribeSecret"],
   "Resource":["arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/work-??????","arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/personal-??????",
-              "arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/shared-??????","arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/tailscale-??????"]},
+              "arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/shared-??????","arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/tailscale-??????",
+              "arn:aws:secretsmanager:us-east-1:ACCT:secret:jarvis/ofw-??????"]},
  {"Sid":"JarvisKeyViaServices","Effect":"Allow","Action":["kms:GenerateDataKey","kms:Decrypt"],"Resource":"arn:aws:kms:us-east-1:ACCT:key/*",
   "Condition":{"ForAnyValue:StringEquals":{"kms:ResourceAliases":"alias/jarvis"},
    "StringEquals":{"kms:ViaService":["s3.us-east-1.amazonaws.com","secretsmanager.us-east-1.amazonaws.com"]}}}]}
@@ -333,7 +347,8 @@ JarvisOperator and JarvisAdmin and is not signed in on the workstation.
   only on instances tagged `app=jarvis`. The instance id is unknown in `org/`.
 - SessionDocuments: the three session documents only. The `SessionDocumentAccessCheck` condition
   on the instance statement forces `start-session` to name one of them.
-- CommandDocuments: the four Jarvis documents only; no `AWS-RunShellScript`.
+- CommandDocuments: the six Jarvis documents only (AD40 added `jarvis-ofw-login` and
+  `jarvis-ofw-reset`); no `AWS-RunShellScript`.
 - OwnSessionsOnly: end or resume sessions in this account. The `${aws:userid}-*` self-restriction
   is dropped: for SSO principals `aws:userid` is `AROA...:<session name>` while session ids start
   with the session name only, so the pattern could not be verified to match. JarvisOperator is the
@@ -341,8 +356,8 @@ JarvisOperator and JarvisAdmin and is not signed in on the workstation.
 - SsmAndEc2ReadOnly: these calls do not support resource-level permissions. Region-pinned.
 - WriteReleases and ListReleases: `make release` uploads the tarball and `.sha256`; `make deploy`
   writes `releases/DEPLOYED`.
-- PutValueSecrets: the human sets values with the CLI (brief 0.2). Write only: the operator cannot
-  read the values back.
+- PutValueSecrets: the human sets values with the CLI (brief 0.2), `jarvis/ofw` included (AD34).
+  Write only: the operator cannot read the values back.
 - JarvisKeyViaServices: SSE-KMS uploads and `PutSecretValue` need the key through those services
   only.
 

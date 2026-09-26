@@ -5,6 +5,17 @@
 # daemons, and health-checks each -- rolling back to the previous release on any failure from the
 # ops/aws/ install step onward. infra/DESIGN.md sections 8.2/8.3; PLAN.md AD19, AD31.
 #
+# PLAN.md AD40: when the release also ships ofw-mcp/ (the ofw-mcp wheel + hash-pinned
+# requirements-lock.txt + tests, built by scripts/release.sh), this also builds a second venv
+# (ofw-venv) under the same release directory, installs the bundled Chromium (system deps as
+# root, the browser itself as jarvis-ofw, AD31), and runs the ofw-mcp suite (-m "not browser") as
+# jarvis-build. ofw-mcp.service is restarted alongside the two mode units and, once its own
+# ConditionPathExists checks pass (the binary exists AND the human has populated jarvis/ofw),
+# health-checked over its loopback /healthz; a release without ofw-mcp/, or a box where the human
+# has not populated secrets yet, skips all of that with one log line and is never a health
+# failure. The one /opt/jarvis/current symlink covers both venvs, so rollback restores both at
+# once; rollback also restarts ofw-mcp.service (via restart_daemons(), below).
+#
 # All paths derive from JARVIS_ROOT (default /opt/jarvis) so tests can point it at a temp dir. A
 # few paths are never under JARVIS_ROOT even in production (systemd units, iptables rules, the
 # CloudWatch agent config, logrotate, and the mode users' home directories); those have their own
@@ -38,7 +49,7 @@ if [ -z "${JARVIS_ARTIFACTS_BUCKET:-}" ] && [ -f "$INSTANCE_ENV_FILE" ]; then
   eval "$(grep -E '^JARVIS_(ARTIFACTS_BUCKET|REGION)=' "$INSTANCE_ENV_FILE")"
 fi
 ARTIFACTS_BUCKET="${JARVIS_ARTIFACTS_BUCKET:?JARVIS_ARTIFACTS_BUCKET must be set (env or /etc/jarvis/instance.env)}"
-# AD34: region literals leave every script. JARVIS_REGION (env) wins; otherwise fall back to the
+# AD42: region literals leave every script. JARVIS_REGION (env) wins; otherwise fall back to the
 # file user_data.sh.tftpl writes before bootstrap.sh runs (JARVIS_REGION_FILE override for tests).
 # Fails loudly if both are empty.
 REGION_FILE="${JARVIS_REGION_FILE:-/etc/jarvis/region}"
@@ -144,6 +155,64 @@ build_and_test() {
   TEST_HOME=""
 }
 
+# AD40: ofw-venv, sibling to the Jarvis .venv under the same release directory. `ensure_build_user`
+# is already called by build_and_test(); calling it again here is a harmless idempotent recheck
+# (id -u), kept so this function stands on its own.
+#
+# Gate fix (item 2): a live box bootstrapped before phase I has no jarvis-ofw user yet.
+# install_release_ops_aws (which also sources lib/users.sh and calls setup_users) does not run
+# until AFTER unpack_release in main(), so this function ensures jarvis-ofw exists itself, before
+# its own first `runuser -u jarvis-ofw` step -- never assumes install_release_ops_aws already ran.
+ensure_ofw_user() {
+  local users_lib="$1/ops/aws/lib/users.sh"
+  [ -f "$users_lib" ] || fail "release $SHA has no ops/aws/lib/users.sh; cannot ensure jarvis-ofw exists"
+  # shellcheck source=/dev/null
+  . "$users_lib"
+  setup_users || fail "setup_users failed for $SHA; current left unchanged"
+}
+
+build_and_test_ofw() {
+  local release_dir="$1" ofw_dir="$1/ofw-mcp" venv="$1/ofw-venv" wheel wheel_count
+  log "building ofw-mcp venv in $venv"
+  python3.12 -m venv "$venv"
+  "$venv/bin/pip" install --quiet --require-hashes -r "$ofw_dir/requirements-lock.txt"
+
+  wheel_count="$(find "$ofw_dir/wheels" -maxdepth 1 -name '*.whl' 2>/dev/null | wc -l | tr -d '[:space:]')"
+  [ "$wheel_count" = "1" ] || fail "expected exactly one ofw-mcp wheel in $ofw_dir/wheels, found $wheel_count"
+  wheel="$(find "$ofw_dir/wheels" -maxdepth 1 -name '*.whl')"
+  "$venv/bin/pip" install --quiet --no-deps "$wheel"
+
+  log "installing chromium system dependencies as root"
+  "$venv/bin/playwright" install-deps chromium \
+    || fail "playwright install-deps chromium failed for $SHA; current left unchanged"
+
+  ensure_ofw_user "$release_dir"
+
+  # AD31: the browser itself is installed as jarvis-ofw (never root) into that user's own cache.
+  log "installing chromium as jarvis-ofw"
+  runuser -u jarvis-ofw -- env HOME=/home/jarvis-ofw \
+    PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright \
+    "$venv/bin/playwright" install chromium \
+    || fail "playwright install chromium failed for $SHA; current left unchanged"
+
+  ensure_build_user
+  TEST_HOME="$(mktemp -d)"
+  chown jarvis-build:jarvis-build "$TEST_HOME"
+  log "running ofw-mcp pytest as jarvis-build (HOME=$TEST_HOME)"
+  # Gate fix (item 1, PLAN.md AD40 amendment): the shipped tests/ + pyproject.toml + lock are
+  # self-contained (deps/ofw-mcp.sha's own contract, see deps/README.md); ofw-mcp's own "repo"
+  # marker covers any test that imports from its scripts/ or reads outside tests/, so it is
+  # excluded here alongside "browser" and "live" (item 13: "not live" was already implied by
+  # nothing here ever setting OFW_LIVE=1, now made explicit in the marker expression itself).
+  if ! ( cd "$release_dir" && runuser -u jarvis-build -- env HOME="$TEST_HOME" \
+           PYTHONDONTWRITEBYTECODE=1 "$venv/bin/pytest" -q -m "not browser and not live and not repo" \
+           -p no:cacheprovider -c "$ofw_dir/pyproject.toml" "$ofw_dir/tests" ); then
+    fail "ofw-mcp test suite failed for $SHA; current left unchanged"
+  fi
+  rm -rf -- "$TEST_HOME"
+  TEST_HOME=""
+}
+
 unpack_release() {
   local release_dir="$RELEASES_DIR/$SHA"
   if [ -f "$release_dir/.complete" ]; then
@@ -153,6 +222,11 @@ unpack_release() {
   install -d -m 0755 "$release_dir"
   tar -xzf "$STAGING_DIR/jarvis-$SHA.tar.gz" -C "$release_dir"
   build_and_test "$release_dir"
+  if [ -d "$release_dir/ofw-mcp" ]; then
+    build_and_test_ofw "$release_dir"
+  else
+    log "release $SHA has no ofw-mcp/, skipping ofw-mcp packaging"
+  fi
   touch "$release_dir/.complete"
 }
 
@@ -187,7 +261,7 @@ switch_current() {
   python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$JARVIS_ROOT/current.new" "$CURRENT_LINK"
 }
 
-restart_daemons() { systemctl restart jarvis@work jarvis@personal; }
+restart_daemons() { systemctl restart jarvis@work jarvis@personal ofw-mcp.service; }
 
 wait_for_health() {
   local mode="$1" ip port token deadline resp ok got_mode dep
@@ -225,6 +299,39 @@ wait_for_health() {
   return 1
 }
 
+# check_ofw_health: AD40. Returns 0 (no failure) both when ofw-mcp.service passed its own health
+# check AND when it is still condition-skipped (release has no ofw-mcp/, or the human has not yet
+# populated jarvis/ofw) -- neither is a deploy failure. Returns 1 only when the unit's own
+# conditions passed (it is meant to be running) but /healthz did not answer ok in time.
+check_ofw_health() {
+  local condition
+  condition="$(systemctl show ofw-mcp.service -p ConditionResult 2>/dev/null)"
+  if [ "$condition" = "ConditionResult=no" ]; then
+    log "ofw_mcp_not_deployed_yet"
+    return 0
+  fi
+  if wait_for_ofw_health; then
+    return 0
+  fi
+  log "ofw-mcp /healthz check failed"
+  return 1
+}
+
+wait_for_ofw_health() {
+  # Loopback, unauthenticated (AD33): root is one of the two uids the iptables owner rule allows
+  # through on 8783, so this needs no token, unlike the per-mode /health checks above.
+  local deadline resp ok
+  deadline=$(($(date +%s) + HEALTH_TIMEOUT_S))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if resp="$(curl -sf --max-time 5 "http://127.0.0.1:8783/healthz" 2>/dev/null)"; then
+      ok="$(printf '%s' "$resp" | jq -r 'if (.ok|type)=="boolean" then (.ok|tostring) else empty end' 2>/dev/null)"
+      [ "$ok" = "true" ] && return 0
+    fi
+    sleep "$HEALTH_INTERVAL_S"
+  done
+  return 1
+}
+
 prune_old_releases() {
   # Keeps the $keep most-recent releases by mtime. cur and prev are additionally, explicitly
   # protected even in the (should-never-happen) case their mtime doesn't already rank them there;
@@ -245,7 +352,7 @@ rollback() {
   local prev="$1" health_ok=1
   if [ -z "$prev" ]; then
     log "no previous release to roll back to; stopping both daemons"
-    systemctl stop jarvis@work jarvis@personal 2>/dev/null || true
+    systemctl stop jarvis@work jarvis@personal ofw-mcp.service 2>/dev/null || true
     log "rolled_back none -> stopped"
     return 0
   fi
@@ -284,6 +391,7 @@ main() {
   if [ "$ok" -eq 1 ]; then restart_daemons || ok=0; fi
   if [ "$ok" -eq 1 ]; then wait_for_health work || ok=0; fi
   if [ "$ok" -eq 1 ]; then wait_for_health personal || ok=0; fi
+  if [ "$ok" -eq 1 ]; then check_ofw_health || ok=0; fi
 
   if [ "$ok" -eq 1 ]; then
     prune_old_releases "$KEEP_RELEASES" "$prev"

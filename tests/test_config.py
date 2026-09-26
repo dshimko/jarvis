@@ -95,3 +95,16 @@ def test_repo_local_profile(monkeypatch):
     assert cfg["modes"]["work"]["vault"] == "${WIN_HOME}/Vaults/Jarvis-Work"
     assert cfg["modes"]["personal"]["env_file"] == "env/personal.env"
     assert cfg["modes"]["work"]["read_tools"]            # shared keys still come from config.yaml
+
+
+@pytest.mark.parametrize("profile", ["local", "aws"])
+def test_ofw_config_ad39(profile):
+    cfg = load_config(REPO, profile)
+    personal = cfg["modes"]["personal"]
+    assert set(cfg["schedule"]["personal"]) == {"evening-review"}          # nothing polls OFW on a timer
+    assert "ofw-mcp" not in (cfg["modes"]["work"].get("repos") or {})
+    assert "mcp__ofw__ofw_status" in personal["read_tools"]
+    assert "mcp__ofw__ofw_status" not in personal["write_tools"]
+    control = {"mcp__ofw__confirm_privileged", "mcp__ofw__reset_breaker"}
+    assert not control & set(personal["read_tools"])                        # write-token tools stay out of sessions
+    assert not [t for t in cfg["modes"]["work"]["read_tools"] if t.startswith("mcp__ofw__")]

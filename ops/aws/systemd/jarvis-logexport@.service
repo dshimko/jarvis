@@ -7,7 +7,11 @@ Before=jarvis@%i.service
 [Service]
 Type=simple
 User=root
-ExecStart=/bin/sh -c 'exec journalctl -f -o cat -u jarvis@%i --cursor-file=/var/lib/jarvis-logexport/%i.cursor | /opt/jarvis/bin/jarvis-logfilter %i >> /var/log/jarvis/%i.jsonl'
+# AD37: the exported unit defaults to this instance's own jarvis@%i, but is not always that --
+# jarvis-logexport@ofw.service.d/unit.conf overrides this same variable to ofw-mcp.service, which
+# is not a template unit at all. %i still names the mode/target for the cursor file and jsonl path.
+Environment=JARVIS_LOGEXPORT_UNIT=jarvis@%i.service
+ExecStart=/bin/sh -c 'exec journalctl -f -o cat -u ${JARVIS_LOGEXPORT_UNIT} --cursor-file=/var/lib/jarvis-logexport/%i.cursor | /opt/jarvis/bin/jarvis-logfilter %i >> /var/log/jarvis/%i.jsonl'
 Restart=always
 RestartSec=5
 UMask=0027

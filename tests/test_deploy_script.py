@@ -9,6 +9,7 @@ temp JARVIS_HOME_DIR standing in for /home). Skipped on Windows: the script is b
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import re
 import stat
@@ -43,19 +44,32 @@ def _write_shim(bin_dir: Path, name: str, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _make_release_tarball(bucket: Path, sha: str) -> None:
+def _make_release_tarball(
+    bucket: Path, sha: str, *, include_ofw: bool = False, ofw_wheel_count: int = 1
+) -> None:
     """Builds a minimal, valid release tree under a scratch dir and tars it into `bucket`,
     matching the layout scripts/release.sh produces: a top-level ops/aws/ with something in every
     subdirectory jarvis-deploy.sh (via the real ops/aws/lib/install-release.sh, copied in here
     verbatim so the test exercises the actual file) installs, plus requirements-lock.txt for the
     fake hash-pinned venv build. `jarvis-status`'s content is sha-specific so a test can tell
-    which release actually got (re)installed."""
+    which release actually got (re)installed.
+
+    ofw-mcp.service and the jarvis-logexport@ofw.service.d/ drop-in are always present (bootstrap
+    ships both regardless of whether a given release also carries the ofw-mcp wheel bundle,
+    PLAN.md AD40/AD37) -- exercising install-release.sh's generic drop-in loop and its
+    setup_users() call on every deploy, not just ofw-mcp ones. lib/users.sh here is a fake
+    (install-release.sh only needs to source it and call setup_users -- the real production
+    users.sh is bootstrap-engineer's own file and its own tests' concern, not testable from here
+    without root and a real Linux box, AD31). The optional ofw-mcp/ directory (wheel + lock +
+    pyproject + tests) is only added when include_ofw is set (PLAN.md AD40: "a release without
+    ofw-mcp/ skips all of this with one log line")."""
     src = bucket / f"src-{sha}"
     for sub in ("bin", "libexec", "systemd", "cloudwatch", "logrotate", "iptables", "lib", "ssm"):
         (src / "ops" / "aws" / sub).mkdir(parents=True)
     (src / "ops" / "aws" / "bin" / "jarvis-status").write_text(f"#!/usr/bin/env bash\necho ok-{sha}\n")
     (src / "ops" / "aws" / "libexec" / "jarvis-vault-commit").write_text("#!/usr/bin/env bash\n")
     (src / "ops" / "aws" / "systemd" / "jarvis@.service").write_text("[Unit]\n")
+    (src / "ops" / "aws" / "systemd" / "ofw-mcp.service").write_text("[Unit]\n")
     (src / "ops" / "aws" / "cloudwatch" / "amazon-cloudwatch-agent.json").write_text("{}")
     (src / "ops" / "aws" / "logrotate" / "jarvis").write_text("")
     (src / "ops" / "aws" / "iptables" / "rules.v4").write_text("*filter\nCOMMIT\n")
@@ -64,7 +78,28 @@ def _make_release_tarball(bucket: Path, sha: str) -> None:
     (src / "ops" / "aws" / "lib" / "install-release.sh").write_text(
         INSTALL_RELEASE_LIB.read_text(encoding="utf-8")
     )
+    dropin_dir = src / "ops" / "aws" / "systemd" / "jarvis-logexport@ofw.service.d"
+    dropin_dir.mkdir(parents=True)
+    (dropin_dir / "unit.conf").write_text(f"[Service]\nEnvironment=JARVIS_LOGEXPORT_UNIT=ofw-mcp.service\n# {sha}\n")
+    (src / "ops" / "aws" / "lib" / "users.sh").write_text(
+        "setup_users() {\n"
+        f'  printf "setup_users called for {sha}\\n" >> "${{JARVIS_TEST_SETUP_USERS_LOG:?}}"\n'
+        # Item 2: the marker the fake `runuser` shim checks before allowing "-u jarvis-ofw"
+        # through -- proves setup_users runs before the first runuser call into that user.
+        '  : > "${JARVIS_TEST_OFW_USER_MARKER:?}"\n'
+        "}\n"
+    )
     (src / "requirements-lock.txt").write_text("")
+
+    if include_ofw:
+        ofw_dir = src / "ofw-mcp"
+        (ofw_dir / "wheels").mkdir(parents=True)
+        for i in range(ofw_wheel_count):
+            (ofw_dir / "wheels" / f"ofw_mcp-0.1.{i}-py3-none-any.whl").write_bytes(b"fake-wheel")
+        (ofw_dir / "requirements-lock.txt").write_text("")
+        (ofw_dir / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n")
+        (ofw_dir / "tests").mkdir()
+        (ofw_dir / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n")
 
     release_dir = bucket / "releases" / sha
     release_dir.mkdir(parents=True)
@@ -101,9 +136,32 @@ def deploy_env(tmp_path):
     curl_calls_log = tmp_path / "curl_calls.log"
     curl_headers_log = tmp_path / "curl_headers.log"
     runuser_calls_log = tmp_path / "runuser_calls.log"
+    # AD40 additions: a second pytest fail marker (ofw-venv's own suite, independent of the
+    # Jarvis suite's marker above), the ofw-mcp.service systemd condition state (default unset ->
+    # "ConditionResult=no", i.e. not deployed yet), an ofw-specific /healthz failure switch (kept
+    # separate from health_fail_marker, which fails every curl call including the two mode ones),
+    # and a playwright call log (both the root install-deps call and the runuser-wrapped browser
+    # install land here; runuser_calls_log is what distinguishes which ran as jarvis-ofw).
+    ofw_pytest_fail_marker = tmp_path / "ofw_pytest_should_fail"
+    ofw_deployed_marker = tmp_path / "ofw_mcp_condition_result_yes"
+    ofw_health_fail_marker = tmp_path / "ofw_health_should_fail"
+    playwright_calls_log = tmp_path / "playwright_calls.log"
+    playwright_should_fail = tmp_path / "playwright_should_fail"
+    setup_users_log = tmp_path / "setup_users.log"
+    # Item 2: unset until the fake setup_users() (built into every release, above) has run; the
+    # runuser shim below refuses "-u jarvis-ofw" while it is absent, so a test can prove
+    # ensure_ofw_user() (build_and_test_ofw) runs setup_users before its first runuser call.
+    ofw_user_marker = tmp_path / "ofw_user_created"
+    pip_calls_log = tmp_path / "pip_calls.log"
 
     shim_dir = tmp_path / "fakebin"
     shim_dir.mkdir()
+
+    _write_shim(
+        shim_dir,
+        "playwright",
+        f'printf "%s\\n" "$*" >> "{playwright_calls_log}"\n[ -f "{playwright_should_fail}" ] && exit 1\nexit 0\n',
+    )
 
     _write_shim(shim_dir, "id", 'if [ "$2" = "jarvis-build" ]; then echo 0; exit 0; fi\nexit 1\n')
     _write_shim(shim_dir, "useradd", "exit 0\n")
@@ -115,30 +173,63 @@ def deploy_env(tmp_path):
         # H1/M9: log every call (mode/user + full remaining argv) before exec'ing, so tests can
         # confirm the per-mode token is read via runuser (never a root path traversal, AD31) and
         # that jarvis-build is used for the test run, without capturing the token value itself.
+        # Item 2: refuses "-u jarvis-ofw" outright (simulating a real `runuser: user jarvis-ofw
+        # does not exist`) until the fake setup_users() has touched ofw_user_marker, so a test can
+        # prove build_and_test_ofw ensures the user exists before its first runuser -u jarvis-ofw
+        # step, not only later via install_release_ops_aws.
         (
             f'printf "%s\\n" "$*" >> "{runuser_calls_log}"\n'
+            f'if [ "$2" = "jarvis-ofw" ] && [ ! -f "{ofw_user_marker}" ]; then\n'
+            '  echo "runuser: user jarvis-ofw does not exist" >&2\n'
+            "  exit 1\n"
+            "fi\n"
             'shift\nshift\n[ "${1:-}" = "--" ] && shift\nexec "$@"\n'
         ),
     )
     _write_shim(shim_dir, "tailscale", 'if [ "$1" = "ip" ]; then echo 100.64.1.2; exit 0; fi\nexit 1\n')
-    _write_shim(shim_dir, "systemctl", f'echo "systemctl $*" >> "{systemctl_log}"\nexit 0\n')
+    _write_shim(
+        shim_dir,
+        "systemctl",
+        (
+            f'echo "systemctl $*" >> "{systemctl_log}"\n'
+            'if [ "$1" = "show" ] && [ "$2" = "ofw-mcp.service" ]; then\n'
+            f'  if [ -f "{ofw_deployed_marker}" ]; then echo "ConditionResult=yes"; else echo "ConditionResult=no"; fi\n'
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n"
+        ),
+    )
     # No mv or sha256sum shims needed: jarvis-deploy.sh's own switch_current() uses `ln -sfn` +
     # `python3 -c 'os.replace(...)'` (portable rename, not GNU mv -T) and sha256_check() falls
     # back to `shasum -a 256` when sha256sum isn't on PATH, which is the case on macOS.
-    _write_shim(shim_dir, "pip", "exit 0\n")
+    _write_shim(shim_dir, "pip", f'echo "$*" >> "{pip_calls_log}"\nexit 0\n')
     _write_shim(
         shim_dir,
         "python3.12",
         (
             'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then\n'
             '  mkdir -p "$3/bin"\n'
-            '  printf \'#!/usr/bin/env bash\\nexit 0\\n\' > "$3/bin/pip"\n'
+            # Gate fix (item 9): logs every install invocation (so a test can assert
+            # --require-hashes / --no-deps were passed) instead of a bare no-op. `echo`, not
+            # `printf "%s\n"`, so the generated pip script needs no escaping of its own.
             "  {\n"
             "    printf '#!/usr/bin/env bash\\n'\n"
-            f'    printf \'[ -f "{pytest_fail_marker}" ] && exit 1\\n\'\n'
+            f'    printf \'echo "$*" >> "{pip_calls_log}"\\n\'\n'
+            "    printf 'exit 0\\n'\n"
+            '  } > "$3/bin/pip"\n'
+            "  {\n"
+            "    printf '#!/usr/bin/env bash\\n'\n"
+            # AD40: the SAME generated pytest script lands in both .venv/bin and ofw-venv/bin
+            # (both are created by "python3.12 -m venv <path>"); it tells the two suites apart by
+            # its own invocation path ($0), so each venv's pytest honors its own fail marker only.
+            "    printf 'case \"$0\" in\\n'\n"
+            f'    printf \'  */ofw-venv/*) [ -f "{ofw_pytest_fail_marker}" ] && exit 1 ;;\\n\'\n'
+            f'    printf \'  *) [ -f "{pytest_fail_marker}" ] && exit 1 ;;\\n\'\n'
+            "    printf 'esac\\n'\n"
             "    printf 'exit 0\\n'\n"
             '  } > "$3/bin/pytest"\n'
-            '  chmod +x "$3/bin/pip" "$3/bin/pytest"\n'
+            f'  cp "{shim_dir}/playwright" "$3/bin/playwright"\n'
+            '  chmod +x "$3/bin/pip" "$3/bin/pytest" "$3/bin/playwright"\n'
             "  exit 0\n"
             "fi\n"
             "exit 1\n"
@@ -171,8 +262,15 @@ def deploy_env(tmp_path):
             '  prev="$a"\n'
             "done\n"
             f'[ -n "$hdrfile" ] && [ -f "$hdrfile" ] && cat "$hdrfile" >> "{curl_headers_log}"\n'
-            f'if [ -f "{health_fail_marker}" ]; then exit 22; fi\n'
             'for a in "$@"; do url="$a"; done\n'
+            "case \"$url\" in\n"
+            "  *:8783/healthz)\n"
+            f'    [ -f "{ofw_health_fail_marker}" ] && exit 22\n'
+            "    printf '{\"ok\": true, \"breaker\": \"closed\"}'\n"
+            "    exit 0\n"
+            "    ;;\n"
+            "esac\n"
+            f'if [ -f "{health_fail_marker}" ]; then exit 22; fi\n'
             'mode=work; case "$url" in *:8782/*) mode=personal ;; esac\n'
             'printf \'{"ok": true, "mode": "%s", "deployment": "aws"}\' "$mode"\n'
         ),
@@ -196,6 +294,9 @@ def deploy_env(tmp_path):
         # already holding it when this suite itself runs on-box (as jarvis-build, inside
         # jarvis-deploy.sh's own build_and_test step) -- always scope the lock to this test.
         "JARVIS_DEPLOY_LOCK": str(tmp_path / "deploy.lock"),
+        # AD40: read by the fake ops/aws/lib/users.sh built into every release tree above.
+        "JARVIS_TEST_SETUP_USERS_LOG": str(setup_users_log),
+        "JARVIS_TEST_OFW_USER_MARKER": str(ofw_user_marker),
     }
     return {
         "env": env,
@@ -207,6 +308,14 @@ def deploy_env(tmp_path):
         "curl_calls_log": curl_calls_log,
         "curl_headers_log": curl_headers_log,
         "runuser_calls_log": runuser_calls_log,
+        "ofw_pytest_fail_marker": ofw_pytest_fail_marker,
+        "ofw_deployed_marker": ofw_deployed_marker,
+        "ofw_health_fail_marker": ofw_health_fail_marker,
+        "playwright_calls_log": playwright_calls_log,
+        "playwright_should_fail": playwright_should_fail,
+        "setup_users_log": setup_users_log,
+        "ofw_user_marker": ofw_user_marker,
+        "pip_calls_log": pip_calls_log,
     }
 
 
@@ -379,7 +488,7 @@ def test_prune_keeps_exactly_the_configured_number_of_releases(deploy_env):
 
 
 def test_refuses_to_run_when_region_is_not_set(deploy_env, tmp_path):
-    """AD34: region literals leave every script. With no JARVIS_REGION env var and no region
+    """AD42: region literals leave every script. With no JARVIS_REGION env var and no region
     file to fall back to, jarvis-deploy.sh must fail loudly instead of defaulting to a
     hardcoded region, and must exit before touching JARVIS_ROOT."""
     env = dict(deploy_env["env"])
@@ -408,6 +517,393 @@ def test_requirements_lock_exists_and_every_pinned_entry_is_hashed():
             hashed = True
             j += 1
         assert hashed, f"requirements-lock.txt line {i + 1} ({lines[i]!r}) has no --hash"
+
+
+# -- PLAN.md AD40: ofw-mcp packaging inside jarvis-deploy.sh ----------------------------------
+
+SHA_OFW_1 = "1" * 40
+SHA_OFW_2 = "2" * 40
+
+
+def test_release_without_ofw_mcp_skips_ofw_packaging_cleanly(deploy_env):
+    """SHA_A's release (built by the shared fixture) has no ofw-mcp/ directory at all."""
+    result = _run_deploy(SHA_A, deploy_env["env"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "has no ofw-mcp/, skipping ofw-mcp packaging" in output
+    assert "ofw_mcp_not_deployed_yet" in output
+    assert not (deploy_env["root"] / "releases" / SHA_A / "ofw-venv").exists()
+    assert not deploy_env["playwright_calls_log"].exists()
+
+
+def test_ofw_venv_built_and_browser_installed_as_the_user(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True)
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    release_dir = deploy_env["root"] / "releases" / SHA_OFW_1
+    assert (release_dir / "ofw-venv" / "bin" / "pip").is_file()
+    assert (release_dir / "ofw-venv" / "bin" / "playwright").is_file()
+
+    playwright_calls = deploy_env["playwright_calls_log"].read_text()
+    assert "install-deps chromium" in playwright_calls
+    assert "install chromium" in playwright_calls
+
+    runuser_calls = deploy_env["runuser_calls_log"].read_text().splitlines()
+    ofw_lines = [ln for ln in runuser_calls if "jarvis-ofw" in ln]
+    assert ofw_lines, "expected a runuser -u jarvis-ofw call (the browser install, AD31)"
+    assert any("PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright" in ln and "install chromium" in ln for ln in ofw_lines)
+    # AD31/AD40: the system-deps install runs directly as root, never through runuser.
+    assert not any("install-deps" in ln for ln in ofw_lines)
+
+    # Gate fix (item 1, PLAN.md AD40 amendment): self-contained marker expression.
+    assert any(
+        "jarvis-build" in ln and "not browser and not live and not repo" in ln for ln in runuser_calls
+    )
+
+    # Gate fix (item 9): --require-hashes for the lock install, --no-deps for the wheel install.
+    ofw_dir = deploy_env["root"] / "releases" / SHA_OFW_1 / "ofw-mcp"
+    pip_calls = deploy_env["pip_calls_log"].read_text().splitlines()
+    assert any(
+        "install" in ln and "--require-hashes" in ln and str(ofw_dir / "requirements-lock.txt") in ln
+        for ln in pip_calls
+    )
+    assert any("install" in ln and "--no-deps" in ln and ".whl" in ln for ln in pip_calls)
+
+
+def test_ensure_ofw_user_runs_before_first_runuser_jarvis_ofw_call(deploy_env):
+    """Gate fix (item 2): a live box bootstrapped before phase I has no jarvis-ofw user yet.
+    build_and_test_ofw must create it (via ensure_ofw_user/setup_users) before its own first
+    `runuser -u jarvis-ofw` step, not rely on install_release_ops_aws running later in main(). The
+    fake runuser shim refuses "-u jarvis-ofw" until the fake setup_users() has touched the marker,
+    so this fails loudly if the ordering ever regresses."""
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True)
+    assert not deploy_env["ofw_user_marker"].exists()
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert deploy_env["ofw_user_marker"].exists()
+    assert "-u jarvis-ofw --" in deploy_env["runuser_calls_log"].read_text()
+
+
+def test_ofw_zero_wheels_refused(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True, ofw_wheel_count=0)
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode != 0
+    assert "expected exactly one ofw-mcp wheel" in (result.stdout + result.stderr)
+    assert not (deploy_env["root"] / "current").exists()
+
+
+def test_ofw_two_wheels_refused(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True, ofw_wheel_count=2)
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode != 0
+    assert "expected exactly one ofw-mcp wheel" in (result.stdout + result.stderr)
+    assert not (deploy_env["root"] / "current").exists()
+
+
+def test_ofw_unit_condition_skipped_health_check_passes_without_rollback(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True)
+    # ofw_deployed_marker is deliberately NOT set: ofw-mcp.service stays condition-skipped (the
+    # human has not populated jarvis/ofw yet), matching a live box right after this release lands.
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ofw_mcp_not_deployed_yet" in (result.stdout + result.stderr)
+    current = deploy_env["root"] / "current"
+    assert os.path.basename(os.readlink(current)) == SHA_OFW_1
+
+
+def test_ofw_health_failure_rolls_back_and_restarts_ofw_unit(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True)
+    _make_release_tarball(bucket, SHA_OFW_2, include_ofw=True)
+    env = deploy_env["env"]
+    deploy_env["ofw_deployed_marker"].write_text("1")
+
+    first = _run_deploy(SHA_OFW_1, env)
+    assert first.returncode == 0, first.stdout + first.stderr
+
+    deploy_env["ofw_health_fail_marker"].write_text("fail")
+    second = _run_deploy(SHA_OFW_2, env)
+
+    assert second.returncode != 0
+    current = deploy_env["root"] / "current"
+    assert os.path.basename(os.readlink(current)) == SHA_OFW_1, "current must still point at the ofw-healthy release"
+    output = second.stdout + second.stderr
+    assert "ofw-mcp /healthz check failed" in output
+    assert "rolled_back" in output or "rollback_health_check_failed" in output
+    restarts = deploy_env["systemctl_log"].read_text().count("restart jarvis@work jarvis@personal ofw-mcp.service")
+    assert restarts >= 2, "expected one restart for the failed deploy and one more during rollback"
+
+
+def test_ofw_pytest_failure_leaves_current_untouched(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True)
+    deploy_env["ofw_pytest_fail_marker"].write_text("fail")
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode != 0
+    assert "ofw-mcp test suite failed" in (result.stdout + result.stderr)
+    assert not (deploy_env["root"] / "current").exists()
+
+
+def test_playwright_install_deps_failure_fails_before_switch(deploy_env):
+    bucket = deploy_env["bucket"]
+    _make_release_tarball(bucket, SHA_OFW_1, include_ofw=True)
+    deploy_env["playwright_should_fail"].write_text("fail")
+
+    result = _run_deploy(SHA_OFW_1, deploy_env["env"])
+
+    assert result.returncode != 0
+    assert "playwright install-deps chromium failed" in (result.stdout + result.stderr)
+    assert not (deploy_env["root"] / "current").exists()
+
+
+def test_install_release_creates_users_and_installs_generic_drop_ins(deploy_env):
+    """TODO.md phase I gate (bootstrap half, MEDIUM): install-release.sh now runs setup_users
+    (idempotent) and installs any *.service.d/ drop-in shipped under ops/aws/systemd/, before any
+    unit is restarted -- so a live box that receives a release through jarvis-deploy without a
+    bootstrap re-run still gets jarvis-ofw and the logexport drop-in."""
+    result = _run_deploy(SHA_A, deploy_env["env"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"setup_users called for {SHA_A}" in deploy_env["setup_users_log"].read_text()
+
+    systemd_dir = Path(deploy_env["env"]["JARVIS_SYSTEMD_DIR"])
+    dropin_dir = systemd_dir / "jarvis-logexport@ofw.service.d"
+    dropin_file = dropin_dir / "unit.conf"
+    assert dropin_file.is_file()
+    assert stat.S_IMODE(dropin_dir.stat().st_mode) == 0o755
+    assert stat.S_IMODE(dropin_file.stat().st_mode) == 0o644
+
+
+# -- Gate fix item 6: ops/aws/lib/users.sh propagates every step's failure -------------------
+#
+# Static, not behavioral: users.sh calls real useradd/groupadd/stat -c (GNU-only) and hardcodes
+# /home/<user>/etc paths, so it can only ever run for real as root on a real Linux box (like the
+# rest of ops/aws/lib). Bootstrap-engineer owns its behavioral coverage; this only proves every
+# mutating step this phase touches still ends in `|| return 1`.
+
+USERS_LIB = REPO_ROOT / "ops" / "aws" / "lib" / "users.sh"
+
+
+def _extract_function(source: str, name: str) -> str:
+    match = re.search(rf"^{re.escape(name)}\(\) \{{\n(.*?)^\}}\n", source, re.MULTILINE | re.DOTALL)
+    assert match, f"{name}() not found in {USERS_LIB}"
+    return match.group(1)
+
+
+def _logical_lines(body: str) -> list:
+    """Joins bash line-continuations (a trailing, unquoted `\\`) so a multi-line statement like
+    `useradd ... \\\n  --shell ... || return 1` is checked as ONE logical line, not split across
+    two where only the second half ends in `|| return 1`."""
+    lines, buf = [], ""
+    for raw in body.splitlines():
+        buf += raw
+        if buf.rstrip().endswith("\\"):
+            buf = buf.rstrip()[:-1] + " "
+            continue
+        lines.append(buf)
+        buf = ""
+    if buf:
+        lines.append(buf)
+    return lines
+
+
+def test_users_sh_setup_users_checks_every_mutating_step():
+    body = _extract_function(USERS_LIB.read_text(encoding="utf-8"), "setup_users")
+    mutating_prefixes = ("install ", "useradd ", "groupadd ", "runuser ", "chmod ", "echo root >")
+    checked = 0
+    for line in _logical_lines(body):
+        stripped = line.strip()
+        if stripped.startswith(mutating_prefixes):
+            checked += 1
+            assert stripped.endswith("|| return 1"), f"unchecked step in setup_users(): {stripped!r}"
+    assert checked >= 10, "expected setup_users() to still contain its usual mutating steps"
+
+
+def test_users_sh_create_mode_user_checks_every_mutating_step():
+    body = _extract_function(USERS_LIB.read_text(encoding="utf-8"), "create_mode_user")
+    mutating_prefixes = ("useradd ", "groupadd ", "chmod ", "assert_real_home_dir ")
+    checked = 0
+    for line in _logical_lines(body):
+        stripped = line.strip()
+        if stripped.startswith(mutating_prefixes):
+            checked += 1
+            assert stripped.endswith("|| return 1"), f"unchecked step in create_mode_user(): {stripped!r}"
+    assert checked >= 3, "expected create_mode_user() to still contain its usual mutating steps"
+
+
+# -- Gate fix item 5/9: scripts/release.sh secret scan over the ofw-mcp/ tree ----------------
+
+RELEASE_SCRIPT = REPO_ROOT / "scripts" / "release.sh"
+
+
+def test_release_secret_scan_catches_planted_secrets_under_ofw_mcp(tmp_path):
+    """Gate fix (item 5): the extended regex (secrets*.json, state.json, .env/.env.<suffix>)
+    catches these even nested under ofw-mcp/tests/, where a careless fixture could plant one."""
+    tarball = tmp_path / "jarvis-test.tar.gz"
+    planted = (
+        "ofw-mcp/tests/fixtures/secrets.json",
+        "ofw-mcp/tests/fixtures/state.json",
+        "ofw-mcp/.env.local",
+    )
+    with tarfile.open(tarball, "w:gz") as tf:
+        for name in planted:
+            data = b"{}"
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+    driver = f"source '{RELEASE_SCRIPT}'\nassert_no_secrets '{tarball}'\n"
+    result = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    for name in planted:
+        assert name in output, f"expected the scan to name {name}"
+
+
+# -- Gate fix item 3: scripts/ssm-run.sh polls get-command-invocation, no fixed 100s wait ----
+
+SSM_RUN_SCRIPT = REPO_ROOT / "scripts" / "ssm-run.sh"
+
+
+def _write_ssm_run_aws_shim(bin_dir: Path, *, statuses: list, out: str = "ok", err: str = "") -> Path:
+    """A fake `aws` implementing only `ssm send-command` (returns a fixed command id) and
+    `ssm get-command-invocation` (pops the next value off `statuses` on every `--query Status`
+    call, repeating the last one once the list is exhausted -- so a test can script "InProgress"
+    N times before a terminal status)."""
+    statuses_file = bin_dir / "statuses.txt"
+    statuses_file.write_text("\n".join(statuses) + "\n")
+    index_file = bin_dir / "status_index.txt"
+    index_file.write_text("0\n")
+    body = (
+        'if [ "$1" = "ssm" ] && [ "$2" = "send-command" ]; then\n'
+        '  echo "cmd-test-123"\n'
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "ssm" ] && [ "$2" = "get-command-invocation" ]; then\n'
+        '  query=""; prev=""\n'
+        '  for a in "$@"; do\n'
+        '    if [ "$prev" = "--query" ]; then query="$a"; fi\n'
+        '    prev="$a"\n'
+        "  done\n"
+        '  case "$query" in\n'
+        "    Status)\n"
+        f'      idx="$(cat "{index_file}")"\n'
+        f'      total="$(wc -l < "{statuses_file}" | tr -d "[:space:]")"\n'
+        '      [ "$idx" -lt "$total" ] || idx=$((total - 1))\n'
+        f'      sed -n "$((idx + 1))p" "{statuses_file}"\n'
+        f'      next=$((idx + 1)); [ "$next" -ge "$total" ] && next=$((total - 1))\n'
+        f'      echo "$next" > "{index_file}"\n'
+        "      ;;\n"
+        f'    StandardOutputContent) printf \'%s\' "{out}" ;;\n'
+        f'    StandardErrorContent) printf \'%s\' "{err}" ;;\n'
+        "  esac\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    path = bin_dir / "aws"
+    path.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
+def _run_ssm_run(env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", str(SSM_RUN_SCRIPT), "jarvis-status", "i-fake"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+
+
+def test_ssm_run_polls_through_in_progress_to_success(tmp_path):
+    shim_dir = tmp_path / "fakebin"
+    shim_dir.mkdir()
+    _write_ssm_run_aws_shim(shim_dir, statuses=["InProgress", "InProgress", "Success"], out="hello")
+    env = {
+        **os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1",
+        "SSM_RUN_TIMEOUT_S": "30", "SSM_RUN_POLL_INTERVAL_S": "0.1",
+    }
+
+    result = _run_ssm_run(env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "hello" in result.stdout
+
+
+def test_ssm_run_reports_failure_after_polling(tmp_path):
+    shim_dir = tmp_path / "fakebin"
+    shim_dir.mkdir()
+    _write_ssm_run_aws_shim(shim_dir, statuses=["InProgress", "Failed"], err="boom")
+    env = {
+        **os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1",
+        "SSM_RUN_TIMEOUT_S": "30", "SSM_RUN_POLL_INTERVAL_S": "0.1",
+    }
+
+    result = _run_ssm_run(env)
+
+    assert result.returncode != 0
+    assert "boom" in (result.stdout + result.stderr)
+
+
+def test_ssm_run_gives_up_after_its_own_timeout_when_never_terminal(tmp_path):
+    """Gate fix (item 3): must not hang forever, and must not depend on botocore's fixed 100s
+    `wait command-executed` budget -- bounded by SSM_RUN_TIMEOUT_S instead."""
+    shim_dir = tmp_path / "fakebin"
+    shim_dir.mkdir()
+    _write_ssm_run_aws_shim(shim_dir, statuses=["InProgress"])
+    env = {
+        **os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1",
+        "SSM_RUN_TIMEOUT_S": "1", "SSM_RUN_POLL_INTERVAL_S": "0.2",
+    }
+
+    result = _run_ssm_run(env)
+
+    assert result.returncode != 0
+
+
+def test_ssm_run_positional_timeout_wins_over_the_env_default(tmp_path):
+    """The Makefile passes <timeout-seconds> as the third argument (H2); it bounds the poll even
+    when SSM_RUN_TIMEOUT_S says otherwise, and is not forwarded to send-command."""
+    shim_dir = tmp_path / "fakebin"
+    shim_dir.mkdir()
+    _write_ssm_run_aws_shim(shim_dir, statuses=["InProgress"])
+    env = {
+        **os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1",
+        "SSM_RUN_TIMEOUT_S": "600", "SSM_RUN_POLL_INTERVAL_S": "0.2",
+    }
+
+    result = subprocess.run(
+        ["bash", str(SSM_RUN_SCRIPT), "jarvis-status", "i-fake", "1"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "timeout 1s" in result.stderr
+
+
+def test_ssm_run_no_longer_uses_the_fixed_wait_command_executed():
+    content = SSM_RUN_SCRIPT.read_text(encoding="utf-8")
+    # Anchored at line-start (allowing only leading whitespace) so this matches an actual
+    # invocation, not this file's own explanatory comment about the fix.
+    assert re.search(r"^\s*aws ssm wait\b", content, re.MULTILINE) is None
 
 
 # -- scripts/sync-agents.sh (R1) --------------------------------------------------------------

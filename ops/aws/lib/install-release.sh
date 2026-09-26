@@ -19,11 +19,24 @@
 # Every step returns 1 immediately on the first failure. Deliberately never relies on `set -e`:
 # callers often invoke this as part of an `if`/`&&`/`||` condition, where -e is suspended for the
 # whole call (see jarvis-deploy.sh's own comment on this), so control flow here is explicit.
+#
+# TODO.md (phase I gate, bootstrap half, MEDIUM): a live box updated through jarvis-deploy without
+# a bootstrap re-run never gained new OS users (jarvis-ofw, PLAN.md AD33) or new systemd drop-ins
+# (jarvis-logexport@ofw.service.d/, AD37). Fixed here: setup_users runs first (idempotent -- see
+# ops/aws/lib/users.sh's own header comment; safe to call on every deploy, on a box that already
+# has everything it creates), and every *.service.d/*.timer.d directory shipped under
+# $src/systemd/ is installed generically, before any unit is restarted.
 install_release_files() {
   local src="$1" bin_dir="$2" libexec_dir="$3" systemd_dir="$4" iptables_dir="$5" \
-        cw_config_dir="$6" logrotate_dir="$7" f
+        cw_config_dir="$6" logrotate_dir="$7" f d name
 
   [ -d "$src" ] || { echo "[install-release] no ops/aws directory at $src" >&2; return 1; }
+
+  if [ -f "$src/lib/users.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$src/lib/users.sh"
+    setup_users || return 1
+  fi
 
   install -d -m 0755 "$bin_dir" "$libexec_dir" || return 1
   for f in "$src"/bin/*; do
@@ -63,6 +76,18 @@ install_release_files() {
     install -m 0644 "$src/systemd/polkit-procadm.conf" "$systemd_dir/polkit.service.d/procadm.conf" \
       || return 1
   fi
+  # Generic *.service.d/*.timer.d drop-in directories shipped pre-structured under
+  # $src/systemd/ (for example jarvis-logexport@ofw.service.d/unit.conf, PLAN.md AD37/AD40),
+  # as opposed to the flat single-file conventions handled by the three blocks above.
+  for d in "$src"/systemd/*.service.d "$src"/systemd/*.timer.d; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    install -d -m 0755 "$systemd_dir/$name" || return 1
+    for f in "$d"/*; do
+      [ -e "$f" ] || continue
+      install -m 0644 "$f" "$systemd_dir/$name/$(basename "$f")" || return 1
+    done
+  done
 
   if [ -f "$src/iptables/rules.v4" ] || [ -f "$src/iptables/rules.v6" ]; then
     install -d -m 0755 "$iptables_dir" || return 1

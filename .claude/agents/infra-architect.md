@@ -46,7 +46,7 @@ DESIGN.md must contain, with these exact section headings so reviewers and build
 8. **Deploy and rollback**: the release layout under `releases/<sha>/` (tarball + `.sha256`), the
    SSM document contract (AD19), the atomic symlink switch, the health check target, and the
    rollback condition.
-9. **Cost estimate**: line items with unit prices for the deployment region (`us-east-1`, AD34)
+9. **Cost estimate**: line items with unit prices for the deployment region (`us-east-1`, AD42)
    and monthly totals; on-demand
    t4g.medium, gp3, snapshots under the backup plan, public IPv4, CloudWatch logs/metrics/alarms,
    Secrets Manager, KMS, S3, VPC flow logs, SSM, data transfer. Show the total against the $60

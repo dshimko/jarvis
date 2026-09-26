@@ -158,3 +158,220 @@ def _safe_read(path: Path) -> str:
         return path.read_text()
     except (UnicodeDecodeError, PermissionError):
         return ""
+
+
+# --------------------------------------------------------------------------------------------
+# AD33-AD41: OFW MCP server bootstrap surface (third OS user jarvis-ofw, ofw-mcp.service, the
+# 8783 iptables owner rule, and the jarvis-logexport@ template/drop-in split).
+# --------------------------------------------------------------------------------------------
+
+def test_users_sh_creates_jarvis_ofw_2003_and_no_mode_dirs():
+    text = (OPS_AWS / "lib" / "users.sh").read_text()
+    assert 'create_mode_user "$user" 2003' in text
+    assert ".local/state/ofw-mcp" in text
+    assert ".cache/ms-playwright" in text
+    # AD33: not a mode -- no vault, no .claude, no Syncthing state dir for jarvis-ofw.
+    assert "jarvis-ofw/vault" not in text
+    assert "jarvis-ofw/.claude" not in text
+    assert "jarvis-ofw/.local/state/syncthing" not in text
+
+
+def test_imds_guard_asserts_jarvis_ofw_uid_2003():
+    text = (OPS_AWS / "bin" / "jarvis-imds-guard").read_text()
+    assert "assert_user_blocked ofw 2003" in text
+
+
+def test_ofw_mcp_service_shape_and_hardening():
+    text = (OPS_AWS / "systemd" / "ofw-mcp.service").read_text()
+    for expected in (
+        "User=jarvis-ofw",
+        "Group=jarvis-ofw",
+        "WorkingDirectory=/opt/jarvis/current",
+        "ExecStart=/opt/jarvis/current/ofw-venv/bin/ofw-mcp serve",
+        "ConditionPathExists=/opt/jarvis/current/ofw-venv/bin/ofw-mcp",
+        # AD40 (amended): a second, distinct-type condition so both must hold (AND), not either
+        # (OR) -- see the unit file's own comment for why this isn't a second
+        # ConditionPathExists= line.
+        "ConditionPathExistsGlob=/home/jarvis-ofw/.jarvis/env",
+        "Requires=jarvis-secrets.service jarvis-imds-guard.service",
+        "Environment=OFW_MCP_PROFILE=aws",
+        "Environment=OFW_MCP_BIND=127.0.0.1:8783",
+        "Environment=OFW_TZ=America/Detroit",
+        "Environment=HOME=/home/jarvis-ofw",
+        "Environment=PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright",
+        "BindPaths=/home/jarvis-ofw",
+        "ReadWritePaths=/home/jarvis-ofw",
+        "UMask=0077",
+        "LimitCORE=0",
+        "Restart=always",
+        "RestartSec=10",
+        "NoNewPrivileges=yes",
+        "ProtectSystem=strict",
+    ):
+        assert expected in text, f"missing directive: {expected!r}"
+    assert re.search(r"^After=.*jarvis-secrets\.service.*jarvis-imds-guard\.service", text, re.MULTILINE)
+
+
+# Every hardening/gating directive named here must be byte-for-byte identical between
+# jarvis@.service (after %i -> ofw) and ofw-mcp.service -- deleting or drifting a single line in
+# either unit fails this test, since ofw-mcp starts from "the jarvis@.service hardening block"
+# (AD33) and is not supposed to diverge from it yet (phase D relaxes specific directives later).
+_HARDENING_DIRECTIVES = (
+    "NoNewPrivileges", "ProtectSystem", "ProtectHome", "BindPaths", "ReadWritePaths",
+    "PrivateTmp", "PrivateDevices", "ProtectProc", "ProcSubset", "ProtectKernelTunables",
+    "ProtectKernelModules", "ProtectControlGroups", "RestrictSUIDSGID", "LockPersonality",
+    "RestrictRealtime", "RestrictAddressFamilies", "SystemCallArchitectures",
+    "CapabilityBoundingSet", "UMask", "LimitCORE", "StartLimitIntervalSec",
+)
+
+
+# Directives ofw-mcp.service is expected to differ on (its own process identity/execution),
+# never part of "the hardening block": anything in [Service] outside this set and outside
+# _HARDENING_DIRECTIVES is unexpected and fails the test below.
+_ALLOWED_EXTRA_SERVICE_KEYS = {
+    "Type", "User", "Group", "WorkingDirectory", "Environment", "ExecStart",
+    "ExecStartPost", "Restart", "RestartSec", "TimeoutStopSec",
+}
+
+
+def _ordered_hardening_lines(text: str) -> list[str]:
+    """Every line (verbatim, in file order, duplicates kept) whose key is in
+    _HARDENING_DIRECTIVES -- a *list*, not a dict, so an extra/reordered occurrence of a known
+    hardening key is visible instead of silently collapsed to its last value."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        if stripped.split("=", 1)[0] in _HARDENING_DIRECTIVES:
+            out.append(stripped)
+    return out
+
+
+def _service_section_keys(text: str) -> set[str]:
+    """Directive keys appearing anywhere in the [Service] section only (not [Unit]/[Install])."""
+    keys = set()
+    in_service = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        section = re.match(r"^\[(\w+)\]$", stripped)
+        if section:
+            in_service = section.group(1) == "Service"
+            continue
+        if not in_service or not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        keys.add(stripped.split("=", 1)[0])
+    return keys
+
+
+def test_ofw_mcp_hardening_matches_jarvis_at_service_after_percent_i_substitution():
+    jarvis_text = (OPS_AWS / "systemd" / "jarvis@.service").read_text()
+    ofw_text = (OPS_AWS / "systemd" / "ofw-mcp.service").read_text()
+
+    # 1. The ordered sequence of hardening/gating lines must match exactly. An extra directive
+    # inserted before the real one (e.g. a bogus BindPaths=/home/jarvis-personal ahead of the
+    # real BindPaths=/home/jarvis-ofw) changes this list's length/order and fails here, where a
+    # last-wins dict keyed by directive name would keep only the correct final value and pass.
+    jarvis_lines = [line.replace("%i", "ofw") for line in _ordered_hardening_lines(jarvis_text)]
+    ofw_lines = _ordered_hardening_lines(ofw_text)
+    assert jarvis_lines, "jarvis@.service hardening block came back empty (fixture out of date)"
+    assert ofw_lines == jarvis_lines
+
+    # 2. No directive anywhere in ofw-mcp.service's [Service] section may fall outside both the
+    # hardening set above and the small set of directives this unit is expected to differ on --
+    # catches an entirely unlisted directive (AmbientCapabilities=, SupplementaryGroups=, ...)
+    # that check 1 would never see, since it only looks at known hardening keys.
+    unexpected = _service_section_keys(ofw_text) - set(_HARDENING_DIRECTIVES) - _ALLOWED_EXTRA_SERVICE_KEYS
+    assert unexpected == set(), f"unexpected directive(s) in ofw-mcp.service [Service]: {sorted(unexpected)}"
+
+
+def test_rules_v4_8783_and_9222_owner_rules_present_and_ordered():
+    # Gate finding: pins both triples' lines AND their order -- both ACCEPTs must appear before
+    # the REJECT, for 8783 (jarvis-personal, uid 2002) and for 9222 (jarvis-ofw, uid 2003; the
+    # Chromium DevTools port `ofw-mcp login` uses, gate I finding: without this rule any local
+    # uid could drive the logged-in browser over CDP).
+    text = (OPS_AWS / "iptables" / "rules.v4").read_text()
+    for port, uid in ((8783, 2002), (9222, 2003)):
+        accept_root = f"-A OUTPUT -o lo -p tcp --dport {port} -m owner --uid-owner 0 -j ACCEPT"
+        accept_user = f"-A OUTPUT -o lo -p tcp --dport {port} -m owner --uid-owner {uid} -j ACCEPT"
+        reject = f"-A OUTPUT -o lo -p tcp --dport {port} -j REJECT --reject-with tcp-reset"
+        assert accept_root in text, f"missing: {accept_root!r}"
+        assert accept_user in text, f"missing: {accept_user!r}"
+        assert reject in text, f"missing: {reject!r}"
+        assert text.index(accept_root) < text.index(accept_user) < text.index(reject), (
+            f"port {port}: both ACCEPTs must precede the REJECT"
+        )
+    # jarvis-work (2001) never gets an ACCEPT on either port; jarvis-ofw (2003) never gets one on
+    # 8783; jarvis-personal (2002) never gets one on 9222.
+    assert "--dport 8783 -m owner --uid-owner 2001" not in text
+    assert "--dport 8783 -m owner --uid-owner 2003" not in text
+    assert "--dport 9222 -m owner --uid-owner 2001" not in text
+    assert "--dport 9222 -m owner --uid-owner 2002" not in text
+
+
+def test_rules_v6_unchanged_since_it_has_no_8781_8782_port_rules():
+    # AD33 says "mirror whatever rules.v6 does for 8781/8782" -- it does nothing for those ports
+    # today (only the IMDSv6-analog rule), so neither 8783 nor 9222 belongs in rules.v6 either.
+    text = (OPS_AWS / "iptables" / "rules.v6").read_text()
+    assert "8783" not in text and "9222" not in text
+    assert "8781" not in text and "8782" not in text
+
+
+def test_logexport_template_uses_variable_and_ofw_dropin_overrides_it():
+    template = (OPS_AWS / "systemd" / "jarvis-logexport@.service").read_text()
+    assert "Environment=JARVIS_LOGEXPORT_UNIT=jarvis@%i.service" in template
+    assert "-u ${JARVIS_LOGEXPORT_UNIT}" in template
+    assert "-u jarvis@%i " not in template and "-u jarvis@%i --cursor" not in template
+
+    dropin = (OPS_AWS / "systemd" / "jarvis-logexport@ofw.service.d" / "unit.conf").read_text()
+    assert "Environment=JARVIS_LOGEXPORT_UNIT=ofw-mcp.service" in dropin
+    assert "Before=ofw-mcp.service" in dropin
+
+
+def test_install_units_installs_ofw_mcp_and_logexport_dropin_and_enables_them():
+    install_text = (OPS_AWS / "lib" / "install-units.sh").read_text()
+    assert "systemd/ofw-mcp.service" in install_text
+    assert "jarvis-logexport@ofw.service.d" in install_text
+    assert "ofw-mcp.service" in install_text
+    assert "jarvis-logexport@ofw.service" in install_text
+
+
+def test_cloudwatch_agent_ships_ofw_log_group():
+    text = (OPS_AWS / "cloudwatch" / "amazon-cloudwatch-agent.json").read_text()
+    assert '"/var/log/jarvis/ofw.jsonl"' in text
+    assert '"/jarvis/ofw"' in text
+
+
+def test_logrotate_glob_covers_ofw_jsonl():
+    text = (OPS_AWS / "logrotate" / "jarvis").read_text()
+    assert "/var/log/jarvis/*.jsonl" in text  # the existing glob already matches ofw.jsonl
+
+
+def test_post_boot_assert_covers_ofw_checks():
+    text = (OPS_AWS / "post-boot-assert.sh").read_text()
+    # All 6 ordered pairs of the three users in the cross-home loop.
+    assert "work:personal personal:work work:ofw ofw:work personal:ofw ofw:personal" in text
+    assert "8783" in text and "9222" in text
+    assert "jarvis-work is rejected on 127.0.0.1:8783" in text
+    assert "jarvis-personal reaches /healthz on 127.0.0.1:8783" in text
+    assert "iptables 8783 owner rule" in text
+    assert "iptables 9222 owner rule" in text
+    assert "port 8783 has a listener whose local address is not 127.0.0.1" in text
+    assert "jarvis-ofw cannot see jarvis-personal processes" in text
+    assert "jarvis-personal cannot see jarvis-ofw processes" in text
+    assert "/home/jarvis-ofw is 0700" in text
+    assert "ofw:2003" in text  # IMDS loop
+
+
+def test_jarvis_status_reports_ofw_mcp_unit_and_healthz():
+    text = (OPS_AWS / "bin" / "jarvis-status").read_text()
+    assert "ofw-mcp.service" in text
+    assert "127.0.0.1:8783/healthz" in text
+    assert ".ok" in text and ".breaker" in text
+
+
+def test_jarvis_secrets_handles_ofw_target():
+    text = (OPS_AWS / "bin" / "jarvis-secrets").read_text()
+    assert '"ofw": "jarvis/ofw"' in text
+    assert 'write_env("ofw", ofw, raw=True)' in text  # ofw-mcp reads raw KEY=value lines
+    assert "shared_violations_source" in text

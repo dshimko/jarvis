@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# jarvis-imds-guard: verifies the IMDS iptables rule is loaded and, in full mode, that neither
-# mode user can reach IMDS (infra/DESIGN.md section 6.5).
+# jarvis-imds-guard: verifies the IMDS iptables rule is loaded and, in full mode, that neither a
+# mode user nor jarvis-ofw can reach IMDS (infra/DESIGN.md section 6.5; PLAN.md AD33).
 #
-# --rules-only: used during first-boot bootstrap, before jarvis-work/jarvis-personal exist. Only
-# checks that the iptables rule itself is present and that root can still reach IMDS.
+# --rules-only: used during first-boot bootstrap, before jarvis-work/jarvis-personal/jarvis-ofw
+# exist. Only checks that the iptables rule itself is present and that root can still reach IMDS.
 # Full mode (default; used by jarvis-imds-guard.service on every boot, and by bootstrap.sh once
-# the mode users have been created): also asserts jarvis-work is uid 2001 and jarvis-personal is
-# uid 2002, then that curl as each user exits 7 (connection refused) against IMDS. The uid/curl
-# assert must never run before the mode users exist -- callers select that with --rules-only.
+# the mode users have been created): also asserts jarvis-work is uid 2001, jarvis-personal is uid
+# 2002, and jarvis-ofw is uid 2003, then that curl as each user exits 7 (connection refused)
+# against IMDS. The uid/curl assert must never run before those users exist -- callers select
+# that with --rules-only.
 set -euo pipefail
 
 rules_only=0
@@ -75,4 +76,5 @@ assert_user_blocked() {
 
 assert_user_blocked work 2001
 assert_user_blocked personal 2002
+assert_user_blocked ofw 2003
 log "PASS: jarvis-imds-guard full checks complete"

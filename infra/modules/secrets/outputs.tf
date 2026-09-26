@@ -1,5 +1,5 @@
 output "value_secret_arns" {
-  description = "ARNs of jarvis/work, jarvis/personal, jarvis/shared, jarvis/tailscale."
+  description = "ARNs of jarvis/work, jarvis/personal, jarvis/shared, jarvis/tailscale, jarvis/ofw."
   value       = { for k, s in aws_secretsmanager_secret.value : k => s.arn }
 }
 
@@ -14,7 +14,7 @@ output "tailscale_secret_id" {
 }
 
 output "secret_names" {
-  description = "All six secret names."
+  description = "All seven secret names."
   value       = concat([for s in aws_secretsmanager_secret.value : s.name], [for s in aws_secretsmanager_secret.token : s.name])
 }
 

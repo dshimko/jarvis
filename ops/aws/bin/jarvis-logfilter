@@ -6,10 +6,10 @@ everything else (Python tracebacks, library prints, systemd messages). infra/DES
 Two layers of off-box content protection, on top of the app's own redaction and logger levels:
 1. Non-JSON-object lines are dropped and counted; a `nonjson_dropped` summary line is emitted at
    most every 300s while drops are happening.
-2. As a second layer, any key named body, text, draft, preview, snippet, subject, transcript,
-   readback, reply, prompt, first_line, args, utterance, or message_text is deleted recursively
-   and case-insensitively before the line is forwarded, in case a stray field ever reached
-   journald despite the app-side filter.
+2. As a second layer, any key in DROP_KEYS (body/text/draft/... plus the AD37 OFW keys: title,
+   description, sender, recipients, thread, messages, events, expenses, entries, attachments)
+   is deleted recursively and case-insensitively before the line is forwarded, in case a stray
+   field ever reached journald despite the app-side filter.
 
 Never logs the content it drops -- only a count.
 """
@@ -20,6 +20,9 @@ import time
 DROP_KEYS = {
     "body", "text", "draft", "preview", "snippet", "subject", "transcript",
     "readback", "reply", "prompt", "first_line", "args", "utterance", "message_text",
+    # AD37: OFW content-carrying keys, same discipline as the app-side filter.
+    "title", "description", "sender", "recipients", "thread", "messages", "events",
+    "expenses", "entries", "attachments",
 }
 REPORT_INTERVAL_S = 300
 

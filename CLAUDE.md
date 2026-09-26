@@ -79,7 +79,7 @@ make plan                              # terraform plan -out plan.out for envs/p
   `jsonencode()` so `terraform test` can inspect them.
 - S3 `aws:kms` without a key id uses the `aws/s3` key; a `StringNotEqualsIfExists` key-id deny
   does not catch it. Deny the header being present without a key id.
-- With the region-deny SCP, every CLI caller must pass `--region` explicitly (AD34: `us-east-1`,
+- With the region-deny SCP, every CLI caller must pass `--region` explicitly (AD42: `us-east-1`,
   read from `$AWS_REGION`/`$JARVIS_REGION` or `/etc/jarvis/region` on the instance -- never a
   hardcoded literal outside Terraform).
 - An organization CloudTrail trail (`management-events`, us-east-1, multi-region) already
@@ -151,6 +151,52 @@ make plan                              # terraform plan -out plan.out for envs/p
   the instance with `ec2 describe-instances` filtered by `tag:app=jarvis`.
 - The box runs two Syncthing instances, so there are two device ids and two ports.
 - Long-running client threads must catch every exception a token source can raise.
+- SSM Command document parameter constraints (`allowedPattern`, `allowedValues`) are the only
+  barrier between an SSM caller and a root shell, because `{{ Param }}` is spliced into the
+  script. Pin them in a `terraform test`, or a loosened pattern goes unnoticed.
+- A Chromium started with `--remote-debugging-port` on 127.0.0.1 is reachable by every local
+  uid. Any loopback debug or forwarded port needs an iptables owner rule like 8783's.
+- `ss` greps for `0.0.0.0`, `*`, or `[::]` do not prove "loopback only": a listener on the
+  Tailscale or VPC address passes. Assert the local address equals 127.0.0.1.
+- A tcp-reset REJECT and a closed port both give `curl` exit 7. A reject check proves the rule
+  only after a listener is confirmed; without one, print a counted failure, never PASS.
+- `echo "$empty" | grep -v PATTERN` succeeds because echo emits one empty line; guard any
+  "anything other than" test with `[ -n "$var" ]`.
+- jq `.flag // empty` treats `false` as absent; test the type instead.
+- A new secret target in `jarvis-secrets sync` gates every unit with `Requires=jarvis-secrets`;
+  an optional secret (`jarvis/ofw`) must be skippable, or an empty secret takes both modes down.
+- `install-release.sh` copies only `systemd/*.service` and `*.timer`; a new `*.service.d`
+  drop-in needs an explicit install step on the deploy path.
+- All `Condition*=` lines in a unit are ANDed, whatever their type; only `|`-prefixed
+  triggering conditions are ORed among themselves (`systemd.unit(5)`). Do not take a
+  builder's claim about unit semantics on trust; the reviewer reads the man page.
+- A dict-of-directives comparison of a unit file misses additive keys (`BindPaths`,
+  `ReadWritePaths`, `SupplementaryGroups`) repeated before the real line; compare ordered lines
+  and reject unlisted directives.
+- Python `\d` matches any Unicode digit and `$` matches before a trailing newline; validate ids
+  and status words with `[0-9]` and `re.fullmatch`, and check status words against a frozenset.
+- Never put code-handled control tools (`confirm_privileged`, `reset_breaker`) in
+  `write_tools`: that makes them outbox-executable. Deny them in the session instead.
+- An SPA can restore the last-viewed page after navigation; a scraper must verify the loaded
+  page's id matches the request before attributing content to it.
+- Env-file readers disagree: the mode daemons read with python-dotenv (quotes stripped,
+  `${VAR}` expanded), while ofw-mcp's `read_raw_env` splits on the first `=` and keeps the value
+  byte for byte. `jarvis-secrets` single-quotes the mode files and writes the ofw file raw
+  (`write_env(..., raw=True)`); quoting the ofw file puts literal quotes into the password.
+- In a worktree session the Bash guard refuses compound commands, recursive deletes, inline
+  perl, and heredocs whose text mentions the version-control tool or its hosting site; use
+  plain single commands and the Write or Edit tool for such content.
+- A deploy step that runs `runuser -u <new user>` must come after `setup_users`: on a live box
+  the user exists only once `install-release.sh` has run.
+- The on-box ofw-mcp suite sees only what `release.sh` ships (`tests/`, `pyproject.toml`, the
+  lock). A test that imports from `scripts/` or reads repo files needs the `repo` marker, which
+  the deploy excludes. Simulate by copying just those files to a scratch dir and running pytest.
+- Tests never write tracked or soon-to-be-tracked repo files (`deps/ofw-mcp.sha`); make the
+  path overridable and point tests at `tmp_path`.
+- The client-side poll bound for an SSM command must exceed the document's `timeoutSeconds`,
+  or the client gives up before the terminal status arrives.
+- On macOS `/bin/bash` 3.2, `"${arr[@]}"` on an empty array under `set -u` is an unbound-variable
+  error. Keep at least one element (`--region`) in shared argument arrays.
 - `close_on_deletion = true` without `prevent_destroy` turns any ForceNew change on
   `aws_organizations_account` (email) into an account closure; review `org/` plans for
   "must be replaced".
@@ -162,10 +208,15 @@ make plan                              # terraform plan -out plan.out for envs/p
   outside `ARCHIVE_PATHS` in `scripts/release.sh` breaks every deploy; `tests/test_release_tree.py`
   runs pytest collection against the git-archive tree to catch this.
 - `aws ssm wait command-executed` is capped at 100 s (20 x 5 s) with no CLI override; poll
-  `get-command-invocation` for anything long-running.
+  `get-command-invocation` for anything long-running (deploy, ofw-login).
 - `ops/aws/ssm/*.sh` reach the box only as SSM document bodies. Anything bootstrap must run
   locally from `ssm/` has to be installed explicitly by `install-units.sh`.
 - python-dotenv is not a raw `KEY=value` reader: unquoted values lose ` #...`, and `${VAR}` is
   expanded regardless of quoting (no escape syntax). `jarvis-secrets` writes single-quoted values
   and rejects a value containing `'` or `${`; the reader-side fix (`interpolate=False`) is in
   `TODO.md`.
+- `tests/test_release_tree.py` archives HEAD, not the index, and runs collection only. To verify
+  a staged merge: `git write-tree`, `git archive <tree> -- config*.yaml $ARCHIVE_PATHS`, extract to
+  scratch, run the full suite there.
+- `python3 -m py_compile` on `ops/aws/bin/*` leaves an ignored `__pycache__` behind; harmless, but
+  a reviewer's compile check is not a no-op on the tree.

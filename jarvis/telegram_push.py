@@ -1,7 +1,8 @@
 """Personal daemon only (AD10): a one-line Telegram notice for each new outbox draft.
 
 The notice carries the id and the draft's first line; the full body and read-back travel only through the
-existing `read <id>` command. Sends go straight to the Bot API over httpx (whose INFO logs, which include
+existing `read <id>` command. send_text (AD39) carries fixed strings only, such as the OFW breaker notice,
+which holds at most an error class. Sends go straight to the Bot API over httpx (whose INFO logs, which include
 the bot token in the URL, are pinned to WARNING by logsetup). Errors log error_class only.
 """
 from __future__ import annotations
@@ -39,17 +40,25 @@ class TelegramPush:
         else:
             self._send(data)
 
+    def send_text(self, text: str) -> bool:
+        """Content-free by contract: callers pass fixed strings carrying at most an error class (AD39).
+        Synchronous; True when Telegram accepted it. Redacted anyway."""
+        return self._post_text(self.redact(text))
+
     def _send(self, data: dict) -> None:
+        self._post_text(self.notice(data), id=data.get("id"))
+
+    def _post_text(self, text: str, **meta) -> bool:
         try:
-            resp = self._post(self._url, json={"chat_id": self._chat, "text": self.notice(data)},
-                              timeout=SEND_TIMEOUT_SECONDS)
+            resp = self._post(self._url, json={"chat_id": self._chat, "text": text}, timeout=SEND_TIMEOUT_SECONDS)
         except Exception as e:                            # never the exception text: it can carry the URL
-            log_event(log, "telegram_push_error", logging.ERROR, error_class=type(e).__name__, id=data.get("id"))
-            return
+            log_event(log, "telegram_push_error", logging.ERROR, error_class=type(e).__name__, **meta)
+            return False
         status = getattr(resp, "status_code", None)
         if status is not None and not HTTP_OK_MIN <= status <= HTTP_OK_MAX:
-            log_event(log, "telegram_push_error", logging.ERROR, error_class="HTTPStatus", status=status,
-                      id=data.get("id"))
+            log_event(log, "telegram_push_error", logging.ERROR, error_class="HTTPStatus", status=status, **meta)
+            return False
+        return True
 
 
 def start(mode: Mode, bus, redact: Callable[[str], str], **kw) -> TelegramPush | None:

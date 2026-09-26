@@ -1,7 +1,7 @@
 locals {
   # DESIGN.md 8.2. Parameter values are constrained by allowedPattern/allowedValues, so the
   # {{ }} substitution below can only ever produce the listed strings. The body reads them as
-  # SHA, MODE, ROTATE.
+  # SHA, MODE, ROTATE, WAIT_SECONDS.
   specs = {
     "jarvis-deploy" = {
       description = "Deploy a release by git sha (runs /opt/jarvis/bin/jarvis-deploy)"
@@ -28,6 +28,22 @@ locals {
     }
     "jarvis-status" = {
       description = "Unit states, heartbeat age, outbox counts, disk, Tailscale state"
+      timeout     = 300
+      parameters  = {}
+      env         = []
+    }
+    # PLAN AD40. The step timeout covers the longest allowed wait (WaitSeconds up to 9999)
+    # plus the unit stop and start.
+    "jarvis-ofw-login" = {
+      description = "Headed OFW login for ofw-mcp: stop the unit, wait for the human, save the session, start the unit"
+      timeout     = 10800
+      parameters = {
+        WaitSeconds = { type = "String", description = "Seconds to wait for the human to log in", allowedPattern = "^[0-9]{1,4}$", default = "900" }
+      }
+      env = ["export WAIT_SECONDS='{{ WaitSeconds }}'"]
+    }
+    "jarvis-ofw-reset" = {
+      description = "Close the ofw-mcp login breaker (removes breaker.json as jarvis-ofw)"
       timeout     = 300
       parameters  = {}
       env         = []

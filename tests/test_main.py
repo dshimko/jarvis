@@ -17,7 +17,7 @@ def test_schedules_filtered_to_the_daemon_mode(modes):
     s = main.schedules({"personal": modes["personal"]}, events.EventBus())
     s.start(paused=True)
     try:
-        assert {j.args[1] for j in s.get_jobs()} == {"evening-review", "ofw-check"}
+        assert {j.args[1] for j in s.get_jobs()} == {"evening-review"}
         assert {j.args[0].name for j in s.get_jobs()} == {"personal"}
     finally:
         s.shutdown(wait=False)
@@ -55,6 +55,45 @@ def test_no_channels_still_runs_watcher(modes, started):
     main.start_services(modes["personal"], {"ofw_watch": {}}, events.EventBus(), lambda t: t,
                         handle=lambda text, ch: "", channels_on=False)
     assert started == ["watcher"]
+
+
+def test_watcher_gets_the_push_send_text(modes, monkeypatch):
+    class Push:
+        def send_text(self, text):
+            return True
+    push, got = Push(), {}
+    monkeypatch.setattr(main.channels, "start_telegram", lambda *a, **k: None)
+    monkeypatch.setattr(main.telegram_push, "start", lambda *a, **k: push)
+    monkeypatch.setattr(main, "_start_watcher", lambda mode, cfg, notify=None: got.update(notify=notify))
+    main.start_services(modes["personal"], {"ofw_watch": {}}, events.EventBus(), lambda t: t,
+                        handle=lambda text, ch: "", channels_on=True)
+    assert got["notify"] == push.send_text
+
+
+@pytest.mark.parametrize("channels_on,push", [(False, "unused"), (True, None)])
+def test_watcher_without_push_gets_no_notify(modes, monkeypatch, channels_on, push):
+    got = {}
+    monkeypatch.setattr(main.channels, "start_telegram", lambda *a, **k: None)
+    monkeypatch.setattr(main.telegram_push, "start", lambda *a, **k: push)
+    monkeypatch.setattr(main, "_start_watcher", lambda mode, cfg, notify=None: got.update(notify=notify))
+    main.start_services(modes["personal"], {"ofw_watch": {}}, events.EventBus(), lambda t: t,
+                        handle=lambda text, ch: "", channels_on=channels_on)
+    assert got == {"notify": None}
+
+
+def test_start_watcher_passes_notify(modes, monkeypatch):
+    seen = {}
+
+    class FakeWatcher:
+        def __init__(self, mode, cfg, **kw):
+            seen.update(mode=mode.name, cfg=cfg, **kw)
+
+        def start(self):
+            seen["started"] = True
+    monkeypatch.setattr(main.gmail_watch, "Watcher", FakeWatcher)
+    notify = lambda text: True
+    main._start_watcher(modes["personal"], {"poll_minutes": 5}, notify=notify)
+    assert seen == {"mode": "personal", "cfg": {"poll_minutes": 5}, "notify": notify, "started": True}
 
 
 def test_watcher_needs_config_block(modes, started):

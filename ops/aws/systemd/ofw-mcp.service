@@ -1,0 +1,75 @@
+[Unit]
+Description=OFW MCP server (jarvis-ofw)
+Wants=network-online.target
+After=network-online.target jarvis-secrets.service jarvis-imds-guard.service
+Requires=jarvis-secrets.service jarvis-imds-guard.service
+StartLimitIntervalSec=0
+# Skipped cleanly (not crash-looping) until a release ships the ofw-mcp wheel and its own venv;
+# jarvis-deploy enables/restarts this unit once ofw-venv/bin/ofw-mcp exists (PLAN.md AD40).
+ConditionPathExists=/opt/jarvis/current/ofw-venv/bin/ofw-mcp
+# PLAN.md AD40 (amended): skipped, not flapping, until the human populates jarvis/ofw. A
+# read-only stat by systemd, not an AD31 write through a user path -- no runuser involved.
+# Deliberately a *different* Condition directive name from the one above, not a second
+# ConditionPathExists=: systemd ORs repeated instances of the same condition type together and
+# ANDs different types, so two ConditionPathExists= lines would start the unit once *either*
+# path existed (defeating this amendment's whole point -- jarvis-secrets writes the env file on
+# every boot regardless of release state, so it can exist well before ofw-venv does).
+# ConditionPathExistsGlob= is a distinct type; with no glob metacharacters it is a plain
+# existence check, so this is equivalent in effect but AND-combined with the condition above.
+ConditionPathExistsGlob=/home/jarvis-ofw/.jarvis/env
+
+[Service]
+Type=simple
+User=jarvis-ofw
+Group=jarvis-ofw
+WorkingDirectory=/opt/jarvis/current
+Environment=OFW_MCP_PROFILE=aws
+Environment=OFW_MCP_BIND=127.0.0.1:8783
+Environment=OFW_TZ=America/Detroit
+Environment=HOME=/home/jarvis-ofw
+Environment=PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright
+Environment=PATH=/home/jarvis-ofw/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/jarvis/current/ofw-venv/bin/ofw-mcp serve
+UMask=0077
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+LimitCORE=0
+
+# Hardening: the same jarvis@.service block (infra/DESIGN.md section 6.3), home swapped for
+# jarvis-ofw's. Left exactly as strict as the mode daemons for phase I; nothing here is relaxed
+# yet -- that is phase D's job, once the Chromium probe shows a specific failure.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/jarvis-ofw
+ReadWritePaths=/home/jarvis-ofw
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+# Phase D Chromium-launch probe (PLAN.md AD33/AD41): if `ofw-mcp login`/`serve` fails to launch
+# the bundled Chromium under this hardening, look here first, in this order, and record whichever
+# is actually needed (do not relax any of these speculatively):
+#   - ProcSubset=pid       -> may need "all" if Chromium's own sandbox reads /proc for other pids
+#   - RestrictNamespaces=yes (not set here; default) -> may need relaxing, Chromium's sandbox uses
+#     its own user/pid namespaces
+#   - PrivateDevices=yes and /dev/shm size -> Chromium's renderer needs working shared memory;
+#     PrivateTmp=yes gives a private /dev/shm, verify it is not too small before disabling either
+#   - Chromium's own launch flags (AD36: --disable-blink-features=AutomationControlled is already
+#     required; --no-sandbox / --disable-dev-shm-usage would be a last resort, not a systemd knob)
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,11 @@ output "managed_attachment_resources" {
   value       = local.managed_attachment_resources
 }
 
+output "monitoring_resources" {
+  description = "Every secret, log group, metric filter, and alarm resource address, by file (ofw inventory)."
+  value       = local.monitoring_resources
+}
+
 output "security_group_resources" {
   description = "Every security group resource address, by file (no_ingress inventory)."
   value       = local.security_group_resources

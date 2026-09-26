@@ -1,15 +1,15 @@
 # org
 
 Runs in the management account (`AWS_PROFILE=sparko` by default in `make plan-org`; AD21).
-The management identity is used only to plan, apply, and later destroy this root (AD36).
+The management identity is used only to plan, apply, and later destroy this root (AD44).
 
-**State is local (AD36):** `infra/org/terraform.tfstate` (and `.backup`), gitignored. It is the
+**State is local (AD44):** `infra/org/terraform.tfstate` (and `.backup`), gitignored. It is the
 only record of the OU and the account resources, so keep it safe: copy it somewhere private and
 backed up after every apply. If it is lost, the OU and account must be imported by hand before
 this root can manage or destroy them. There is no `backend.hcl` here.
 
 Creates an OU named `jarvis` under the organization root (or `parent_id` if set), the
-`jarvis-prod` account inside it (`close_on_deletion = true`, AD35), and three SCPs attached to
+`jarvis-prod` account inside it (`close_on_deletion = true`, AD43), and three SCPs attached to
 the OU (so they apply to the account through it):
 
 | SCP | Attached to the OU |
@@ -22,7 +22,7 @@ Every attachment has a precondition that the `SERVICE_CONTROL_POLICY` type is en
 organization root, so the plan fails instead of the apply. Outputs include `ou_id` and
 `account_id`.
 
-**Teardown (AD35):** run `terraform destroy` here only after `envs/prod` and `bootstrap` have been
+**Teardown (AD43):** run `terraform destroy` here only after `envs/prod` and `bootstrap` have been
 destroyed. One `destroy` detaches every SCP from the OU, closes the `jarvis-prod` account, and
 deletes the OU -- SCP detachment is not a separate step, it happens as part of this destroy. AWS
 keeps a closed account recoverable for 90 days (`SUSPENDED` state); closure becomes permanent, and

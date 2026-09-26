@@ -19,6 +19,9 @@ CFG = load_config()
 
 # Env vars that must never cross into a subprocess. Everything else from os.environ is dropped too.
 PASSTHROUGH = {"PATH", "HOME", "USER", "LANG", "SHELL", "TMPDIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
+# Mode secrets only the outbox executor and code-handled control commands use (AD34). They never enter a
+# `claude -p` (or Jev) subprocess env; the redactor still covers them.
+EXECUTOR_ONLY_KEYS = frozenset({"OFW_MCP_WRITE_TOKEN"})
 
 
 def base_env() -> dict:
@@ -47,8 +50,10 @@ class Mode:
         return self.root / "mcp" / f"{self.name}.mcp.json"
 
     def subprocess_env(self) -> dict:
-        """Only this mode's secrets plus a minimal base. The other mode's tokens are never present."""
-        return {**base_env(), **{k: v for k, v in self.env.items() if v}, "JARVIS_MODE": self.name}
+        """Only this mode's secrets plus a minimal base. The other mode's tokens and EXECUTOR_ONLY_KEYS are
+        never present."""
+        own = {k: v for k, v in self.env.items() if v and k not in EXECUTOR_ONLY_KEYS}
+        return {**base_env(), **own, "JARVIS_MODE": self.name}
 
 
 def check_env_file(path: Path) -> None:

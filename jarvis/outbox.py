@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from mcp import ClientSession
-from . import jev, ledger
+from . import jev, ledger, ofw_result
 from .logsetup import log_event
 from .modes import CFG, Mode, make_redactor
 from .outbox_items import (  # noqa: F401  (re-exported: callers and tests use outbox.<name>)
@@ -33,6 +33,8 @@ APPROVABLE = {"pending", "approved"}
 FUTURE_SKEW = dt.timedelta(minutes=5)
 TONE_FLAG = "tone flag"
 SYNC_CONFLICT_GLOB = "{id}*.sync-conflict-*"      # Syncthing: <name>.sync-conflict-<date>-<time>-<device>.<ext>
+OFW_SERVER = "ofw"
+WRITE_TOKEN_KEYS = {OFW_SERVER: "OFW_MCP_WRITE_TOKEN"}  # AD34: server -> executor-only bearer token env key
 _LISTENERS: list[Callable[[str, str, str, str | None], None]] = []
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -151,7 +153,9 @@ def approve(mode: Mode, item_id: str, reconfirm: bool = False, *, body_sha256: s
 
 # ---- gates ----
 
-def _server_conf(mode: Mode, server: str) -> dict:
+def _server_conf(mode: Mode, server: str, *, write: bool) -> dict:
+    """The repo MCP config for one server with ${VAR} expanded from this mode's env. write=True (executor
+    and write control commands) swaps in the server's executor-only token (AD34)."""
     try:
         servers = json.loads(mode.mcp_config.read_text(encoding="utf-8"))["mcpServers"]
     except (OSError, ValueError, KeyError) as e:
@@ -160,7 +164,13 @@ def _server_conf(mode: Mode, server: str) -> dict:
     if not conf or "url" not in conf:
         raise Blocked(f"server {server} not in {mode.name} config")
     sub = lambda s: re.sub(r"\$\{(\w+)\}", lambda m: mode.env.get(m.group(1), ""), s)
-    return {"url": sub(conf["url"]), "headers": {k: sub(v) for k, v in conf.get("headers", {}).items()}}
+    headers = {k: sub(v) for k, v in conf.get("headers", {}).items()}
+    if write and server in WRITE_TOKEN_KEYS:
+        token = mode.env.get(WRITE_TOKEN_KEYS[server])
+        if not token:
+            raise Blocked(f"{server} write token not configured")
+        headers = {**headers, "Authorization": f"Bearer {token}"}
+    return {"url": sub(conf["url"]), "headers": headers}
 
 
 @asynccontextmanager
@@ -276,19 +286,29 @@ def _send(path: Path, meta: dict, body: str, item_id: str, mode: Mode, conf: dic
     ledger.record_attempt(mode.name, item_id)
     try:
         result = asyncio.run(_call(conf, meta["tool"], args))
-        err = f"server error: {result.content}" if getattr(result, "isError", False) else None
+        err, note = _result_error(meta["server"], result)
     except Exception as e:                           # never log.exception here: the traceback can carry args
         log_event(log, "send_error", logging.ERROR, id=item_id, error_class=type(e).__name__)
-        err = f"send error: {type(e).__name__}"
+        err, note = f"send error: {type(e).__name__}", None
     if err:
         err = _redact(mode, err)
         write_item(path, {**sending, "status": "failed", "last_block": err}, body)
         _notify("item_blocked", mode.name, item_id, err)
         return Outcome(False, f"Failed {item_id}: {err}. Resolve it in Obsidian.", err)
-    write_item(path, {**sending, "status": "sent", "sent_at": _now()}, body)
+    if note:
+        log_event(log, "send_unverified", logging.WARNING, id=item_id, status=note)
+    write_item(path, {**sending, "status": "sent", "sent_at": _now(), **({"sent_note": note} if note else {})}, body)
     ledger.clear_tone(mode.name, item_id)
     _notify("item_sent", mode.name, item_id)
     return Outcome(True, f"Sent {item_id}.")
+
+
+def _result_error(server: str, result) -> tuple[str | None, str | None]:
+    """(error, sent_note). ofw results carry a status word (AD35); other servers only isError."""
+    if server != OFW_SERVER:
+        return (f"server error: {result.content}" if getattr(result, "isError", False) else None), None
+    outcome = ofw_result.classify_send(result)
+    return (None, outcome.note) if outcome.sent else (outcome.note, None)
 
 
 def _unchanged(path: Path, meta: dict, body: str) -> bool:
@@ -309,7 +329,7 @@ def execute_detailed(mode: Mode, item_id: str) -> Outcome:
             return Outcome(False, f"Blocked {item_id}: {e}", str(e))
         try:
             check_gates(mode, meta, body, item_id)
-            conf, args = _server_conf(mode, meta["server"]), parse_args(meta)
+            conf, args = _server_conf(mode, meta["server"], write=True), parse_args(meta)
         except Blocked as e:
             return _block(path, meta, body, item_id, mode, str(e))
         if not _unchanged(path, meta, body):             # compare-and-set approved -> sending (M1)

@@ -3,8 +3,10 @@ variable "documents" {
   type        = map(string)
 
   validation {
-    condition     = toset(keys(var.documents)) == toset(["jarvis-deploy", "jarvis-restart", "jarvis-secrets-sync", "jarvis-status"])
-    error_message = "documents must have exactly jarvis-deploy, jarvis-restart, jarvis-secrets-sync, jarvis-status."
+    condition = toset(keys(var.documents)) == toset([
+      "jarvis-deploy", "jarvis-restart", "jarvis-secrets-sync", "jarvis-status", "jarvis-ofw-login", "jarvis-ofw-reset",
+    ])
+    error_message = "documents must have exactly jarvis-deploy, jarvis-restart, jarvis-secrets-sync, jarvis-status, jarvis-ofw-login, jarvis-ofw-reset."
   }
 }
 

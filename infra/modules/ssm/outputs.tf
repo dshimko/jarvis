@@ -1,5 +1,5 @@
 output "document_names" {
-  description = "The four command documents."
+  description = "The six command documents."
   value       = sort([for d in aws_ssm_document.command : d.name])
 }
 

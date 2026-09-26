@@ -18,7 +18,7 @@ locals {
   }
 }
 
-# AD35: a deletable OU holds the account; `terraform destroy` here closes the account (90-day
+# AD43: a deletable OU holds the account; `terraform destroy` here closes the account (90-day
 # AWS recovery window) and then deletes the empty OU.
 resource "aws_organizations_organizational_unit" "jarvis" {
   name      = "jarvis"

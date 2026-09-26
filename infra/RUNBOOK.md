@@ -45,7 +45,7 @@ troubleshooting) continue in [`infra/RUNBOOK-ops.md`](RUNBOOK-ops.md).
    them:
    - `sparko` -- the existing management-account access (IAM user `Administrator`, account
      `080109295043`, organization `o-lcwqey40mr`, Identity Center in `us-east-1`). Used only to
-     plan and apply, and later destroy, `infra/org/` (AD36) -- never against `bootstrap/` or
+     plan and apply, and later destroy, `infra/org/` (AD44) -- never against `bootstrap/` or
      `envs/prod`.
    - `jarvis-prod` -- IAM Identity Center, `JarvisAdmin` permission set, account `jarvis-prod`.
      Used only for `terraform apply` in `bootstrap/` and `envs/prod`.
@@ -81,7 +81,7 @@ directly against `aws` (not through `make`), below and in `infra/RUNBOOK-ops.md`
 ### 2.1 `org/` (management account, profile `sparko`)
 
 `org/` keeps local Terraform state (`infra/org/terraform.tfstate` and its `.backup`, gitignored) --
-there is no `backend.hcl` and no state bucket in the management account (AD36). This state file is
+there is no `backend.hcl` and no state bucket in the management account (AD44). This state file is
 the only record of the `jarvis` OU and the `jarvis-prod` account, so back it up somewhere outside
 the repo (your password manager's file storage, or an encrypted volume) after every apply. If it
 is lost, both must be imported by hand before this root can manage or destroy them.

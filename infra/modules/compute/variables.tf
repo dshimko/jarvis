@@ -47,12 +47,12 @@ variable "backup_role_arn" {
 }
 
 variable "value_secret_arns" {
-  description = "ARNs of the four value secrets: work, personal, shared, tailscale."
+  description = "ARNs of the five value secrets: work, personal, shared, tailscale, ofw (AD34)."
   type        = map(string)
 
   validation {
-    condition     = toset(keys(var.value_secret_arns)) == toset(["work", "personal", "shared", "tailscale"])
-    error_message = "value_secret_arns must have exactly the keys work, personal, shared, tailscale."
+    condition     = toset(keys(var.value_secret_arns)) == toset(["work", "personal", "shared", "tailscale", "ofw"])
+    error_message = "value_secret_arns must have exactly the keys work, personal, shared, tailscale, ofw."
   }
 }
 

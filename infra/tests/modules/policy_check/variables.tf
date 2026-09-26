@@ -4,7 +4,7 @@ variable "policies" {
 }
 
 variable "region" {
-  description = "Region the expected ARNs, ViaService hosts, and region conditions use; matches the aws_region/home_region defaults (AD34)."
+  description = "Region the expected ARNs, ViaService hosts, and region conditions use; matches the aws_region/home_region defaults (AD42)."
   type        = string
   default     = "us-east-1"
 }
