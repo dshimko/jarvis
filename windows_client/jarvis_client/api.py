@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Callable, Iterable, Iterator, Protocol
 
 import httpx
 
@@ -19,8 +21,17 @@ log = logging.getLogger(__name__)
 
 UTTERANCE_TIMEOUT = 960.0  # the brain can take up to 900s
 DEFAULT_TIMEOUT = 10.0
+SECRETSMANAGER_TIMEOUT = 15.0
 SSE_BACKOFF_START = 1.0
 SSE_BACKOFF_MAX = 30.0
+AWS_REGION = "us-east-1"  # region-deny SCP consequence (PLAN.md 3.2, AD34): every aws call is pinned
+
+# LOW: on Windows, a plain subprocess.run of aws.exe briefly flashes a console window on every
+# token fetch/refresh; CREATE_NO_WINDOW suppresses it. The flag only exists in the `subprocess`
+# module on Windows builds, so it's looked up lazily and only applied there.
+_SUBPROCESS_NO_WINDOW_KW: dict = {}
+if sys.platform == "win32":
+    _SUBPROCESS_NO_WINDOW_KW = {"creationflags": subprocess.CREATE_NO_WINDOW}
 
 
 SAFE_DETAIL_STATUS_CODES = (400, 404, 409)
@@ -83,19 +94,94 @@ def _parse_data(raw: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-class JarvisApi:
-    """One instance per client process. Holds an httpx.Client for connection reuse; pass
-    `transport` (e.g. httpx.MockTransport) to test without a network."""
+class TokenFetchError(Exception):
+    """Raised by a TokenSource when it cannot produce a token at all (as opposed to ApiError,
+    which is the server rejecting a token it received)."""
 
-    def __init__(self, base_url: str, token_path: str, transport: httpx.BaseTransport | None = None):
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), transport=transport)
+
+class TokenSource(Protocol):
+    """`get()` returns the current best-known token (cached where that makes sense); `refresh()`
+    forces a fresh fetch and returns the new value. JarvisApi calls `refresh()` at most once per
+    request, on a 401 -- never in a retry loop."""
+
+    def get(self) -> str: ...
+    def refresh(self) -> str: ...
+
+
+class FileToken:
+    """Reads the bearer token fresh from `token_path` on every get() -- unchanged local/wsl
+    behavior (a regenerated token is picked up without a client restart). refresh() is the same
+    read: a file has no server-side "stale" concept beyond what's already been written to it."""
+
+    def __init__(self, token_path: str):
         self.token_path = token_path
+
+    def get(self) -> str:
+        return read_token(self.token_path)
+
+    def refresh(self) -> str:
+        return self.get()
+
+
+class SecretsManagerToken:
+    """AD16: `aws secretsmanager get-secret-value --profile <p> --secret-id <id> --query
+    SecretString --output text --region <region>` via subprocess, held in memory only -- never
+    written to disk under the aws profile, never logged. `region` comes from
+    ClientConfig.aws_region (AD34: region literals leave every script, including this one) and
+    defaults to AWS_REGION when the caller doesn't pass one. Cached after the first fetch;
+    refresh() always re-fetches (called by JarvisApi once per request, on a 401)."""
+
+    def __init__(self, aws_profile: str, secret_id: str, region: str = AWS_REGION,
+                 runner: Callable[..., "subprocess.CompletedProcess[str]"] | None = None):
+        self._aws_profile = aws_profile
+        self._secret_id = secret_id
+        self._region = region
+        self._runner = runner or subprocess.run
+        self._cached: str | None = None
+
+    def get(self) -> str:
+        if self._cached is None:
+            self._cached = self._fetch()
+        return self._cached
+
+    def refresh(self) -> str:
+        self._cached = self._fetch()
+        return self._cached
+
+    def _fetch(self) -> str:
+        result = self._runner(
+            ["aws", "secretsmanager", "get-secret-value", "--profile", self._aws_profile,
+             "--secret-id", self._secret_id, "--query", "SecretString", "--output", "text",
+             "--region", self._region],
+            capture_output=True, text=True, timeout=SECRETSMANAGER_TIMEOUT,
+            **_SUBPROCESS_NO_WINDOW_KW,
+        )
+        if result.returncode != 0:
+            # Never include stdout/stderr: a failure message from the CLI could, in principle,
+            # echo request context; the exit code is enough to act on.
+            raise TokenFetchError(f"secretsmanager get-secret-value failed (exit {result.returncode})")
+        token = result.stdout.strip()
+        if not token:
+            raise TokenFetchError("secretsmanager get-secret-value returned an empty value")
+        return token
+
+
+class JarvisApi:
+    """One instance per (client process, mode) pair -- AD4: each daemon serves exactly one mode,
+    so a work JarvisApi and a personal JarvisApi point at two different base_urls. Holds an
+    httpx.Client for connection reuse; pass `transport` (e.g. httpx.MockTransport) to test without
+    a network."""
+
+    def __init__(self, base_url: str, token_source: TokenSource,
+                 transport: httpx.BaseTransport | None = None):
+        self._client = httpx.Client(base_url=base_url.rstrip("/"), transport=transport)
+        self._token_source = token_source
 
     def close(self) -> None:
         self._client.close()
 
-    def _headers(self) -> dict:
-        return {"Authorization": f"Bearer {read_token(self.token_path)}"}
+    def _headers(self, token: str) -> dict:
+        return {"Authorization": f"Bearer {token}"}
 
     @staticmethod
     def _raise_for_status(resp: httpx.Response) -> None:
@@ -112,47 +198,82 @@ class JarvisApi:
                 detail = None
         raise ApiError(resp.status_code, server_detail=detail)
 
-    def health(self) -> dict:
-        resp = self._client.get("/health", headers=self._headers(), timeout=DEFAULT_TIMEOUT)
+    def _request(self, method: str, path: str, *, timeout: float, **kw) -> httpx.Response:
+        """Sends with the current token; on a 401, refreshes the token source once and retries
+        exactly once more (a stolen/rotated/stale token is refetched, not retried in a loop)."""
+        resp = self._client.request(method, path, headers=self._headers(self._token_source.get()),
+                                     timeout=timeout, **kw)
+        if resp.status_code == 401:
+            token = self._token_source.refresh()
+            resp = self._client.request(method, path, headers=self._headers(token),
+                                         timeout=timeout, **kw)
         self._raise_for_status(resp)
-        return resp.json()
+        return resp
+
+    def health(self) -> dict:
+        return self._request("GET", "/health", timeout=DEFAULT_TIMEOUT).json()
 
     def utterance(self, text: str, mode: str, mode_confirmed: bool = False) -> dict:
         body = {"text": text, "mode": mode, "mode_confirmed": mode_confirmed}
-        resp = self._client.post("/utterance", json=body, headers=self._headers(),
-                                  timeout=UTTERANCE_TIMEOUT)
-        self._raise_for_status(resp)
-        return resp.json()
+        return self._request("POST", "/utterance", json=body, timeout=UTTERANCE_TIMEOUT).json()
 
     def outbox(self, mode: str) -> list[dict]:
-        resp = self._client.get("/outbox", params={"mode": mode}, headers=self._headers(),
-                                 timeout=DEFAULT_TIMEOUT)
-        self._raise_for_status(resp)
+        resp = self._request("GET", "/outbox", params={"mode": mode}, timeout=DEFAULT_TIMEOUT)
         return resp.json().get("items", [])
 
     def approve(self, mode: str, item_id: str, body_sha256: str, readback_sha256: str,
                 reconfirm: bool = False) -> dict:
         body = {"mode": mode, "id": item_id, "body_sha256": body_sha256,
                  "readback_sha256": readback_sha256, "reconfirm": reconfirm}
-        resp = self._client.post("/approve", json=body, headers=self._headers(),
-                                  timeout=DEFAULT_TIMEOUT)
-        self._raise_for_status(resp)
-        return resp.json()
+        return self._request("POST", "/approve", json=body, timeout=DEFAULT_TIMEOUT).json()
 
     def iter_events(self, sleep: Callable[[float], None] | None = None) -> Iterator[SSEEvent]:
         """Streams /events forever, reconnecting with exponential backoff on any failure. Rereads
-        the token on every (re)connect."""
+        the token (refreshing once on a 401) on every (re)connect."""
         sleep = sleep or time.sleep
         delay = SSE_BACKOFF_START
         while True:
             try:
                 timeout = httpx.Timeout(DEFAULT_TIMEOUT, read=None)
-                with self._client.stream("GET", "/events", headers=self._headers(),
-                                          timeout=timeout) as resp:
+                headers = self._headers(self._token_source.get())
+                with self._client.stream("GET", "/events", headers=headers, timeout=timeout) as resp:
+                    if resp.status_code == 401:
+                        headers = self._headers(self._token_source.refresh())
+                        with self._client.stream("GET", "/events", headers=headers,
+                                                  timeout=timeout) as retried:
+                            self._raise_for_status(retried)
+                            delay = SSE_BACKOFF_START
+                            yield from parse_sse_stream(retried.iter_lines())
+                        continue
                     self._raise_for_status(resp)
                     delay = SSE_BACKOFF_START
                     yield from parse_sse_stream(resp.iter_lines())
-            except (httpx.HTTPError, ApiError, OSError) as exc:
+            except (httpx.HTTPError, ApiError, OSError, TokenFetchError,
+                    subprocess.SubprocessError) as exc:
+                # H6: a SecretsManagerToken can fail transiently (CLI hiccup, SSO token needing a
+                # refresh) -- that must back off and retry like any other disconnect, never crash
+                # the notify/toast thread that owns this generator.
                 log.warning("SSE disconnected (%s), reconnecting in %.0fs", type(exc).__name__, delay)
                 sleep(delay)
                 delay = min(delay * 2, SSE_BACKOFF_MAX)
+
+
+class DualModeApi:
+    """Implements the same call surface `jarvis_client.flow.Api` expects (utterance/outbox/
+    approve, each taking `mode`), by dispatching to the matching per-mode JarvisApi. AD4 means
+    there is no single endpoint that understands both modes any more, but flow.py's voice state
+    machine should not need to know that -- it just calls `.utterance(text, mode, ...)` and this
+    routes it. Built once in __main__.py from the two JarvisApi instances."""
+
+    def __init__(self, apis: dict[str, JarvisApi]):
+        self._apis = apis
+
+    def utterance(self, text: str, mode: str, mode_confirmed: bool = False) -> dict:
+        return self._apis[mode].utterance(text, mode, mode_confirmed)
+
+    def outbox(self, mode: str) -> list[dict]:
+        return self._apis[mode].outbox(mode)
+
+    def approve(self, mode: str, item_id: str, body_sha256: str, readback_sha256: str,
+                reconfirm: bool = False) -> dict:
+        return self._apis[mode].approve(mode, item_id, body_sha256, readback_sha256, reconfirm)

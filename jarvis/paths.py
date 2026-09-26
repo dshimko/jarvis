@@ -86,6 +86,6 @@ def to_windows(p: Path | str) -> str | None:
     return _mnt_to_windows(s) or _run(["wslpath", "-w", s])
 
 
-def obsidian_uri(vault: Path, file: str) -> str:
-    """obsidian://open?vault=<vault dir name>&file=<vault-relative path>."""
-    return f"obsidian://open?vault={quote(Path(vault).name, safe='')}&file={quote(file, safe='')}"
+def obsidian_uri(vault: Path, file: str, name: str | None = None) -> str:
+    """obsidian://open?vault=<name, else the vault dir name>&file=<vault-relative path>."""
+    return f"obsidian://open?vault={quote(name or Path(vault).name, safe='')}&file={quote(file, safe='')}"

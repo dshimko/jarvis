@@ -4,7 +4,8 @@ set -euo pipefail
 
 JARVIS_DIR="$(cd "$(dirname "$0")" && pwd)"
 JARVIS_DOT_DIR="$HOME/.jarvis"
-API_HEALTH_URL="http://localhost:8765/health"
+MODES=(work personal)
+declare -A API_PORT=([work]=8781 [personal]=8782)   # PLAN AD13; must match config.local.yaml
 
 # --- a. WSL2 + systemd-as-PID1 check ---------------------------------------
 OSRELEASE="$(cat /proc/sys/kernel/osrelease)"
@@ -130,19 +131,33 @@ for mode in work personal; do
 done
 
 # --- g. env files ------------------------------------------------------------
-for mode in work personal; do
+for mode in "${MODES[@]}"; do
   [ -f "$JARVIS_DIR/env/$mode.env" ] || cp "$JARVIS_DIR/env/$mode.env.example" "$JARVIS_DIR/env/$mode.env"
 done
 chmod 600 "$JARVIS_DIR"/env/*.env
 chmod 700 "$JARVIS_DIR/env"
 
-# --- h. systemd user unit -----------------------------------------------------
-mkdir -p "$HOME/.config/systemd/user"
-sed "s#__JARVIS_DIR__#$JARVIS_DIR#g" "$JARVIS_DIR/ops/jarvis.service" > "$HOME/.config/systemd/user/jarvis.service"
+# --- h. systemd user units: one daemon per mode (jarvis@work, jarvis@personal) --
+UNIT_DIR="$HOME/.config/systemd/user"
+mkdir -p "$UNIT_DIR"
+# The single combined daemon (jarvis.service, port 8765) is replaced by the per-mode template.
+if [ -f "$UNIT_DIR/jarvis.service" ]; then
+  systemctl --user disable --now jarvis.service 2>/dev/null || true
+  rm -f "$UNIT_DIR/jarvis.service"
+fi
+sed "s#__JARVIS_DIR__#$JARVIS_DIR#g" "$JARVIS_DIR/ops/jarvis@.service" > "$UNIT_DIR/jarvis@.service"
 systemctl --user daemon-reload
-systemctl --user enable jarvis
+
+# No secret value may appear in both env files (key names are printed, never values). A violation
+# leaves the units disabled.
+if ! ( cd "$JARVIS_DIR" && .venv/bin/python -m jarvis.secrets_check env/work.env env/personal.env ); then
+  for mode in "${MODES[@]}"; do systemctl --user disable --now "jarvis@$mode" 2>/dev/null || true; done
+  echo "Refusing to enable jarvis@work / jarvis@personal: fix the shared secrets above, then re-run." >&2
+  exit 1
+fi
+for mode in "${MODES[@]}"; do systemctl --user enable "jarvis@$mode"; done
 sudo loginctl enable-linger "$USER"
-echo "Service installed but NOT started (env files are still empty)."
+echo "Services jarvis@work and jarvis@personal installed but NOT started (env files are still empty)."
 
 # --- i. clock / timezone sanity ------------------------------------------------
 echo "--- timedatectl ---"
@@ -168,7 +183,8 @@ cat <<EOF
 
 Next steps:
   1. Fill in env/work.env and env/personal.env with real secrets.
-  2. Start the daemon: systemctl --user start jarvis
+  2. Start the daemons: systemctl --user start jarvis@work jarvis@personal
+     (re-run this script after editing the env files: it re-checks for shared secrets)
   3. In EACH vault dir, run 'claude' once and use /mcp to authorize OAuth servers:
        cd "$WIN_HOME/Vaults/Jarvis-Work"     && claude   (then /mcp)
        cd "$WIN_HOME/Vaults/Jarvis-Personal" && claude   (then /mcp)
@@ -178,6 +194,7 @@ Next steps:
   4. Fill in the exact read_tools/write_tools MCP names in config.yaml
      (run 'claude mcp list' plus a tool listing in each vault).
   5. On Windows, run windows_client\\install.ps1
-  6. Verify from Windows PowerShell:
-       curl.exe -H "Authorization: Bearer \$(Get-Content \$env:LOCALAPPDATA\\Jarvis\\api_token)" $API_HEALTH_URL
+  6. Verify from Windows PowerShell (work, then personal):
+       curl.exe -H "Authorization: Bearer \$(Get-Content \$env:LOCALAPPDATA\\Jarvis\\api_token)" http://localhost:${API_PORT[work]}/health
+       curl.exe -H "Authorization: Bearer \$(Get-Content \$env:LOCALAPPDATA\\Jarvis\\api_token)" http://localhost:${API_PORT[personal]}/health
 EOF

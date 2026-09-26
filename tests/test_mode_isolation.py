@@ -39,7 +39,8 @@ def utter(client, text, mode, **kw):
 
 
 def test_work_utterance_env_and_mcp(client, modes, runs, jev_scores):
-    assert utter(client, "summarize my slack", "work") == {"reply": "done", "mode_used": "work", "needs_mode": False}
+    assert utter(client, "summarize my slack", "work") == {"reply": "done", "mode_used": "work", "needs_mode": False,
+                                                     "suggested_mode": None}
     call = runs[0]
     env_values = set(call["env"].values())
     assert not env_values & set(PERSONAL_SECRETS)

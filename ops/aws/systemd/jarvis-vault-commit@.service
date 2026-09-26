@@ -1,0 +1,27 @@
+[Unit]
+Description=Auto-commit vault changes for jarvis-%i
+Requires=jarvis-imds-guard.service
+After=jarvis-imds-guard.service
+
+[Service]
+Type=oneshot
+User=jarvis-%i
+Group=jarvis-%i
+WorkingDirectory=/home/jarvis-%i/vault
+ExecStart=/opt/jarvis/libexec/jarvis-vault-commit
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/home/jarvis-%i
+ProtectHome=tmpfs
+BindPaths=/home/jarvis-%i
+PrivateTmp=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+LimitCORE=0

@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""jarvis-logfilter <mode>: forwards only journal lines that parse as a JSON object, dropping
+everything else (Python tracebacks, library prints, systemd messages). infra/DESIGN.md section
+6.3 / 7.1 (AD2, AD11 tightened).
+
+Two layers of off-box content protection, on top of the app's own redaction and logger levels:
+1. Non-JSON-object lines are dropped and counted; a `nonjson_dropped` summary line is emitted at
+   most every 300s while drops are happening.
+2. As a second layer, any key named body, text, draft, preview, snippet, subject, transcript,
+   readback, reply, prompt, first_line, args, utterance, or message_text is deleted recursively
+   and case-insensitively before the line is forwarded, in case a stray field ever reached
+   journald despite the app-side filter.
+
+Never logs the content it drops -- only a count.
+"""
+import json
+import sys
+import time
+
+DROP_KEYS = {
+    "body", "text", "draft", "preview", "snippet", "subject", "transcript",
+    "readback", "reply", "prompt", "first_line", "args", "utterance", "message_text",
+}
+REPORT_INTERVAL_S = 300
+
+
+def scrub(value):
+    if isinstance(value, dict):
+        return {k: scrub(v) for k, v in value.items() if k.lower() not in DROP_KEYS}
+    if isinstance(value, list):
+        return [scrub(v) for v in value]
+    return value
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+    dropped = 0
+    last_report = time.monotonic()
+
+    for raw_line in sys.stdin:
+        line = raw_line.rstrip("\n")
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            obj = None
+
+        if not isinstance(obj, dict):
+            dropped += 1
+        else:
+            print(json.dumps(scrub(obj)), flush=True)
+
+        now = time.monotonic()
+        if dropped and now - last_report >= REPORT_INTERVAL_S:
+            print(json.dumps({"event": "nonjson_dropped", "mode": mode, "count": dropped}), flush=True)
+            dropped = 0
+            last_report = now
+
+    if dropped:
+        print(json.dumps({"event": "nonjson_dropped", "mode": mode, "count": dropped}), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

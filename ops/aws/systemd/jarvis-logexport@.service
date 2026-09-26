@@ -1,0 +1,21 @@
+[Unit]
+Description=Export jarvis@%i journal to /var/log/jarvis/%i.jsonl
+After=jarvis-imds-guard.service
+Requires=jarvis-imds-guard.service
+Before=jarvis@%i.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/bin/sh -c 'exec journalctl -f -o cat -u jarvis@%i --cursor-file=/var/lib/jarvis-logexport/%i.cursor | /opt/jarvis/bin/jarvis-logfilter %i >> /var/log/jarvis/%i.jsonl'
+Restart=always
+RestartSec=5
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/jarvis /var/lib/jarvis-logexport
+PrivateTmp=yes
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

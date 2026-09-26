@@ -1,0 +1,10 @@
+# Copy to prod.auto.tfvars (gitignored). No secret values here, ever (brief rule 0.2).
+expected_account_id = "000000000000" # jarvis-prod account id (org/ output account_id)
+alert_email         = "you@example.com"
+
+# First apply: false. Populate jarvis/work, jarvis/personal, jarvis/shared, jarvis/tailscale,
+# then set true and apply again (AD30).
+instance_enabled = false
+
+# instance_type        = "t4g.medium" # "t3.medium" falls back to x86_64
+# manage_tailscale_acl = false        # true needs TAILSCALE_API_KEY and a reviewed policy.hujson

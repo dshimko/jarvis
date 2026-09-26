@@ -1,0 +1,10 @@
+[Unit]
+Description=Run jarvis-vault-commit@%i every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+Unit=jarvis-vault-commit@%i.service
+
+[Install]
+WantedBy=timers.target

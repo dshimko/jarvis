@@ -1,6 +1,7 @@
-# Jarvis runtime config. Secrets live in env/<mode>.env, never here.
-api:
-  port: 8765              # the API always binds 127.0.0.1; only the port is configurable
+# Jarvis runtime config, shared by every deployment. Secrets never live here.
+# Per-deployment values (vault and env paths, API bind, ports) are in config.<deployment>.yaml,
+# deep-merged over this file (PLAN AD3). JARVIS_DEPLOYMENT overrides the key below.
+deployment: local
 
 jev:
   enabled: true
@@ -13,8 +14,6 @@ jev:
 
 modes:
   work:
-    vault: ${WIN_HOME}/Vaults/Jarvis-Work
-    env_file: env/work.env
     channels: [slack_work, voice]
     daily_write_cap: 20
     agents: [triage, scribe, researcher, comms, builder, reviewer]
@@ -34,8 +33,6 @@ modes:
       ofw-mcp: ~/code/ofw-mcp
       docketsense: ~/code/docketsense
   personal:
-    vault: ${WIN_HOME}/Vaults/Jarvis-Personal
-    env_file: env/personal.env
     channels: [telegram, voice]
     daily_write_cap: 5
     agents: [triage, scribe, comms, coparent, reviewer]

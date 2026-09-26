@@ -1,0 +1,23 @@
+# AWS deployment: one OS user per mode, vault and env in that user's home, API on the Tailscale IP only
+# (PLAN AD3, AD5, AD13, AD17). `{mode}` in a path is replaced with the mode name, which is also how a
+# daemon derives the other mode's vault for its deny list without reading the other mode's config.
+api:
+  bind: tailscale         # `tailscale ip -4` at startup; no Tailscale IP means no start, never 0.0.0.0
+  ports:
+    work: 8781
+    personal: 8782
+
+modes:
+  work:
+    vault: /home/jarvis-{mode}/vault
+    env_file: /home/jarvis-{mode}/.jarvis/env
+    obsidian_vault_name: Jarvis-Work
+  personal:
+    vault: /home/jarvis-{mode}/vault
+    env_file: /home/jarvis-{mode}/.jarvis/env
+    obsidian_vault_name: Jarvis-Personal
+
+# OFW Gmail watcher (AD10), personal daemon only. Read-only scope; ids only, never bodies.
+ofw_watch:
+  poll_minutes: 5
+  query: "from:@ourfamilywizard.com is:unread newer_than:2d"

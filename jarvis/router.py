@@ -29,24 +29,31 @@ def _jev_mode(text: str, env: dict):
         return None
 
 
-def pick_mode(text: str, channel: str, bound_mode: str | None, env: dict,
-              mode_confirmed: bool = False) -> tuple[str | None, str]:
-    """(mode, reason). None means ask the human. D6: voice is hotkey-bound; a disagreeing prefix or a
-    confident Jev disagreement returns None, and only the matching hotkey (mode_confirmed) settles it."""
+def pick_route(text: str, channel: str, bound_mode: str | None, env: dict,
+               mode_confirmed: bool = False) -> tuple[str | None, str, str | None]:
+    """(mode, reason, suggested_mode). None means ask the human; suggested_mode (AD15) names the other mode
+    when the spoken prefix or a confident Jev disagreed with the hotkey. D6: voice is hotkey-bound, and only
+    the matching hotkey (mode_confirmed) settles a disagreement."""
     if channel in CHANNEL_MODE:
-        return CHANNEL_MODE[channel], "bound by channel"
+        return CHANNEL_MODE[channel], "bound by channel", None
     if channel != "voice" or bound_mode not in MODE_NAMES:
-        return None, "unknown channel"
+        return None, "unknown channel", None
     prefix = spoken_prefix(text)
     if prefix and prefix != bound_mode:
-        return None, f"you said {prefix} but the hotkey was {bound_mode}"
+        return None, f"you said {prefix} but the hotkey was {bound_mode}", prefix
     if prefix or mode_confirmed:
-        return bound_mode, "hotkey"
+        return bound_mode, "hotkey", None
     d = _jev_mode(text, env)
     if d is not None and d.value in MODE_NAMES and d.value != bound_mode \
             and d.confidence >= CFG["jev"]["mode_confidence_min"]:
-        return None, f"sounds like {d.value} but hotkey was {bound_mode}"
-    return bound_mode, "hotkey"
+        return None, f"sounds like {d.value} but hotkey was {bound_mode}", d.value
+    return bound_mode, "hotkey", None
+
+
+def pick_mode(text: str, channel: str, bound_mode: str | None, env: dict,
+              mode_confirmed: bool = False) -> tuple[str | None, str]:
+    """(mode, reason) form of pick_route."""
+    return pick_route(text, channel, bound_mode, env, mode_confirmed)[:2]
 
 
 def pick_agent(text: str, mode: Mode) -> str | None:

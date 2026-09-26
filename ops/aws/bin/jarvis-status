@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# jarvis-status: service states, last heartbeat, pending outbox counts, disk use, Tailscale
+# status. `--assert` runs post-boot-assert instead. infra/DESIGN.md section 8.2; PLAN.md AD31
+# (outbox counts go through runuser, never a root path traversal into a mode user's home).
+# Reports states and counts only -- never secret or vault content.
+set -uo pipefail
+
+if [ "${1:-}" = "--assert" ]; then
+  exec /opt/jarvis/bin/post-boot-assert
+fi
+
+echo "== unit states =="
+for unit in jarvis@work.service jarvis@personal.service jarvis-secrets.service \
+  jarvis-imds-guard.service jarvis-logexport@work.service jarvis-logexport@personal.service \
+  syncthing@jarvis-work.service syncthing@jarvis-personal.service \
+  jarvis-vault-commit@work.timer jarvis-vault-commit@personal.timer \
+  amazon-cloudwatch-agent.service; do
+  state=$(systemctl is-active "$unit" 2>/dev/null)
+  echo "$unit: ${state:-unknown}"
+done
+
+echo "== last heartbeat =="
+for mode in work personal; do
+  # M8: jarvis-logfilter writes json.dumps() with its default separators (": ", not ":"), so a
+  # literal-string grep for '"event":"heartbeat"' never matches. jq's stream-of-JSON-values
+  # parsing handles the jsonl format directly and doesn't care about separator whitespace.
+  line=$(jq -c 'select(.event=="heartbeat")' "/var/log/jarvis/$mode.jsonl" 2>/dev/null | tail -n 1)
+  if [ -n "$line" ]; then
+    ts=$(echo "$line" | jq -r '.ts // "unknown"' 2>/dev/null)
+  else
+    ts="none"
+  fi
+  echo "$mode: ${ts:-unknown}"
+done
+
+echo "== pending outbox =="
+for mode in work personal; do
+  user="jarvis-$mode"
+  count=$(runuser -u "$user" -- sh -c 'ls -1 "$HOME/vault/outbox" 2>/dev/null | wc -l' | tr -d '[:space:]')
+  echo "$mode: ${count:-0}"
+done
+
+echo "== disk use =="
+df -h / | tail -n 1
+
+echo "== tailscale =="
+ts_json=$(tailscale status --json 2>/dev/null)
+if [ -n "$ts_json" ]; then
+  echo "$ts_json" | jq -c '{BackendState, TailscaleIPs: .Self.TailscaleIPs}' 2>/dev/null || echo "$ts_json"
+else
+  echo "tailscale status unavailable"
+fi

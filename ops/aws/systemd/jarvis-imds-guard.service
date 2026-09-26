@@ -1,0 +1,14 @@
+[Unit]
+Description=Jarvis IMDS guard: verify the iptables rule blocks mode users from IMDS
+After=netfilter-persistent.service network-online.target
+Requires=netfilter-persistent.service
+Wants=network-online.target
+Before=jarvis-secrets.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/jarvis/bin/jarvis-imds-guard
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+-A OUTPUT -d fd00:ec2::254/128 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable
+COMMIT

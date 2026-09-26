@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""jarvis-syncthing-render <username>: renders this mode's Syncthing config before every start.
+
+Runs as jarvis-<mode> (systemd ExecStartPre under the package unit's User=%i, PLAN.md AD31: no
+"+" prefix, so `tailscale ip -4` runs unprivileged). Exits non-zero if Tailscale is not up or the
+resolved address is not a tailnet address, so Syncthing never starts with a default 0.0.0.0
+listen (infra/DESIGN.md AD8 tightened).
+
+Bootstraps a fresh config with `syncthing generate` (which also creates the bcrypt-hashed GUI
+password) the first time it runs for a user, then rewrites the listen addresses, folder
+definition, and discovery/relay flags on every start.
+"""
+import ipaddress
+import os
+import secrets
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
+GUI_PORT = {"work": 8384, "personal": 8385}
+SYNC_PORT = {"work": 22000, "personal": 22001}
+STIGNORE = "\n".join([
+    ".obsidian/workspace*.json",
+    ".trash/",
+    "outbox/.lock",
+    ".git/",
+]) + "\n"
+
+
+def fail(msg: str) -> None:
+    print(f"[jarvis-syncthing-render] FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def tailscale_ip() -> str:
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        fail(f"could not run tailscale: {exc}")
+        raise  # unreachable, keeps type-checkers happy
+    ip = out.stdout.strip()
+    if out.returncode != 0 or not ip:
+        fail("tailscale ip -4 returned nothing")
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        fail(f"tailscale ip -4 returned an invalid address: {ip}")
+        raise  # unreachable, keeps type-checkers happy
+    if addr not in TAILSCALE_CGNAT:
+        fail(f"tailscale ip {ip} is not in 100.64.0.0/10")
+    return ip
+
+
+def ensure_config(home: str) -> str:
+    config_dir = os.path.join(home, ".local", "state", "syncthing")
+    config_path = os.path.join(config_dir, "config.xml")
+    if os.path.exists(config_path):
+        return config_path
+    os.makedirs(config_dir, mode=0o700, exist_ok=True)
+    gui_password = secrets.token_urlsafe(24)
+    subprocess.run(
+        ["syncthing", "generate", "--config", config_dir,
+         "--gui-user", "jarvis", "--gui-password", gui_password],
+        check=True, capture_output=True, text=True,
+    )
+    return config_path
+
+
+def render(config_path: str, mode: str, home: str, ip: str) -> None:
+    tree = ET.parse(config_path)
+    root = tree.getroot()
+
+    gui = root.find("gui")
+    if gui is None:
+        fail("config.xml has no <gui> element (syncthing generate should have created one)")
+        return
+    gui.set("enabled", "true")
+    address = gui.find("address")
+    if address is None:
+        address = ET.SubElement(gui, "address")
+    address.text = f"127.0.0.1:{GUI_PORT[mode]}"
+
+    options = root.find("options")
+    if options is None:
+        fail("config.xml has no <options> element")
+        return
+    for tag, value in (
+        ("globalAnnounceEnabled", "false"),
+        ("localAnnounceEnabled", "false"),
+        ("relaysEnabled", "false"),
+        ("natEnabled", "false"),
+        ("urAccepted", "-1"),
+        ("crashReportingEnabled", "false"),
+    ):
+        el = options.find(tag)
+        if el is None:
+            el = ET.SubElement(options, tag)
+        el.text = value
+
+    for el in list(options.findall("listenAddress")):
+        options.remove(el)
+    port = SYNC_PORT[mode]
+    for scheme in ("tcp", "quic"):
+        el = ET.SubElement(options, "listenAddress")
+        el.text = f"{scheme}://{ip}:{port}"
+
+    # Exactly one folder per instance (infra/DESIGN.md AD8): drop anything else `syncthing
+    # generate` or a prior run may have created (e.g. a default "~/Sync" folder).
+    folder_id = f"jarvis-{mode}"
+    folder = None
+    for el in list(root.findall("folder")):
+        if el.get("id") == folder_id:
+            folder = el
+        else:
+            root.remove(el)
+    if folder is None:
+        folder = ET.SubElement(root, "folder")
+        folder.set("id", folder_id)
+    folder.set("label", folder_id)
+    folder.set("path", os.path.join(home, "vault"))
+    folder.set("type", "sendreceive")
+    folder.set("fsWatcherEnabled", "true")
+
+    # L2: enforce on every device the workstation runbook may have paired in already -- a
+    # device that could introduce other devices or auto-accept new folders would let the
+    # workstation (or anything it later pairs) widen sync scope without a deliberate step here.
+    for device in root.findall("device"):
+        device.set("introducer", "false")
+        device.set("autoAcceptFolders", "false")
+
+    # Atomic write: a reader (or a concurrent unit start) never sees a partially written config.
+    tmp_path = config_path + ".tmp"
+    tree.write(tmp_path, encoding="utf-8", xml_declaration=True)
+    os.replace(tmp_path, config_path)
+
+    vault_dir = os.path.join(home, "vault")
+    os.makedirs(vault_dir, mode=0o700, exist_ok=True)
+    with open(os.path.join(vault_dir, ".stignore"), "w", encoding="utf-8") as f:
+        f.write(STIGNORE)
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        fail("usage: jarvis-syncthing-render <username>")
+    username = sys.argv[1]
+    if not username.startswith("jarvis-"):
+        fail(f"unexpected username {username}")
+        return 1
+    mode = username[len("jarvis-"):]
+    if mode not in GUI_PORT:
+        fail(f"unknown mode {mode}")
+        return 1
+
+    home = os.path.expanduser("~")
+    ip = tailscale_ip()
+    config_path = ensure_config(home)
+    render(config_path, mode, home, ip)
+    print(f"[jarvis-syncthing-render] rendered {mode} "
+          f"listen={ip}:{SYNC_PORT[mode]} gui=127.0.0.1:{GUI_PORT[mode]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

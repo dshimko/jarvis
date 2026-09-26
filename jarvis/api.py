@@ -1,4 +1,4 @@
-"""Local HTTP API for the Windows tray client. Loopback only, bearer token, no CORS (C5-C7)."""
+"""HTTP API for the Windows tray client: one bind address (AD5), bearer token, no CORS (C5-C7)."""
 from __future__ import annotations
 import asyncio, hmac, json, logging, os, secrets, stat, threading
 from contextlib import asynccontextmanager
@@ -10,13 +10,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import outbox, paths
+from .bind import LOOPBACK_ALLOWED, BindSettings, is_safe_bind_host, resolve_bind
 from .events import EventBus
+from .logsetup import log_event
 from .modes import Mode, make_redactor
 
 log = logging.getLogger(__name__)
-HOST = "127.0.0.1"                      # hardcoded (C7); config may set only the port
-LOOPBACK = {"127.0.0.1", "localhost"}
-DEFAULT_PORT = 8765
+LOCAL = "local"
 HEARTBEAT_SECONDS = 15.0
 SSE_POLL_SECONDS = 1.0
 GRACEFUL_SHUTDOWN_SECONDS = 5
@@ -42,16 +42,9 @@ class ApproveIn(BaseModel):
 
 # ---- settings and token ----
 
-def api_settings(cfg: dict) -> dict:
-    """Validated {host, port}. A non-loopback api.host is a startup error."""
-    api = cfg.get("api") or {}
-    host = api.get("host", HOST)
-    if host not in LOOPBACK:
-        raise SystemExit(f"Refusing to start: api.host {host!r} is not loopback; only the port is configurable")
-    port = api.get("port", DEFAULT_PORT)
-    if not isinstance(port, int) or not 1 <= port <= 65535:
-        raise SystemExit(f"Refusing to start: invalid api.port {port!r}")
-    return {"host": HOST, "port": port}
+def api_settings(cfg: dict, mode: str) -> BindSettings:
+    """Validated bind for this daemon's mode (AD5). Any doubt is a startup error, never a fallback."""
+    return resolve_bind(cfg.get("api") or {}, mode)
 
 
 def _valid_token(t: str) -> bool:
@@ -90,8 +83,13 @@ def copy_token_to_windows(token: str, dest_dir: Path | None = None) -> Path | No
         dest.write_text(token + "\n", encoding="utf-8")
         return dest
     except OSError as e:
-        log.warning("could not copy api_token to %s: %s", dest_dir, e)
+        log_event(log, "token_copy_error", logging.WARNING, error_class=type(e).__name__)
         return None
+
+
+def share_token(token: str, deployment: str) -> Path | None:
+    """AD6: only the local profile copies the token to Windows; on AWS root publishes it to Secrets Manager."""
+    return copy_token_to_windows(token) if deployment == LOCAL else None
 
 
 # ---- views ----
@@ -112,7 +110,7 @@ def item_view(mode: Mode, meta: dict, body: str, path: Path) -> dict:
         "id": str(meta.get("id")), "mode": mode.name, "status": meta.get("status"),
         "preview": body, "first_line": next((l.strip() for l in body.splitlines() if l.strip()), ""),
         "body_sha256": outbox.body_sha256(body), "readback": readback, "readback_sha256": outbox.sha256(readback),
-        "obsidian_uri": paths.obsidian_uri(mode.vault, f"outbox/{path.name}"),
+        "obsidian_uri": paths.obsidian_uri(mode.vault, f"outbox/{path.name}", mode.obsidian_vault_name),
         "windows_path": paths.to_windows(path), "last_block": meta.get("last_block"),
         "tone_flagged": outbox.tone_flagged(mode, meta, body),
     }
@@ -129,10 +127,11 @@ def outbox_view(mode: Mode) -> list[dict]:
     return out
 
 
-def health_view(modes: dict[str, Mode]) -> dict:
-    """C4: booleans and counts only."""
-    return {"ok": True, "modes": {n: {"vault": m.vault.is_dir(), "mcp_config": m.mcp_config.is_file(),
-                                      "pending": len(outbox.pending(m))} for n, m in modes.items()}}
+def health_view(modes: dict[str, Mode], deployment: str = LOCAL) -> dict:
+    """C4: booleans and counts only. AD14: `mode` and `deployment` are additive; `modes` keeps its shape."""
+    return {"ok": True, "mode": next(iter(modes)) if len(modes) == 1 else None, "deployment": deployment,
+            "modes": {n: {"vault": m.vault.is_dir(), "mcp_config": m.mcp_config.is_file(),
+                          "pending": len(outbox.pending(m))} for n, m in modes.items()}}
 
 
 def sse_format(event: dict, redact: Callable[[str], str]) -> str:
@@ -173,10 +172,18 @@ def _auth_dependency(token: str):
     return require_token
 
 
+def _served(modes: dict[str, Mode], name: str) -> Mode:
+    """A daemon serves one mode (AD4); the other mode lives behind the other endpoint."""
+    if name not in modes:
+        raise HTTPException(404, "mode not served here")
+    return modes[name]
+
+
 def _approve(modes, req: ApproveIn, redact) -> dict:
     """approve + execute under the shared per-mode lock (outbox.mode_lock, also used by the text channels)."""
+    mode = _served(modes, req.mode)
     try:
-        out = outbox.approve_and_execute(modes[req.mode], req.id, req.reconfirm, body_sha256=req.body_sha256,
+        out = outbox.approve_and_execute(mode, req.id, req.reconfirm, body_sha256=req.body_sha256,
                                          readback_sha256=req.readback_sha256, strict_reconfirm=True)
     except outbox.NotFound:
         raise HTTPException(404, "no such item")
@@ -184,14 +191,15 @@ def _approve(modes, req: ApproveIn, redact) -> dict:
         raise HTTPException(400, str(e))
     except outbox.Blocked as e:
         raise HTTPException(409, redact(str(e)))
-    except Exception:                                       # D11: fail closed, details stay server-side
-        log.exception("approve/execute failed for %s/%s", req.mode, req.id)
+    except Exception as e:                                  # D11: fail closed, details stay server-side
+        log_event(log, "approve_error", logging.ERROR, id=req.id, error_class=type(e).__name__)
         return {"result": "internal error", "sent": False, "blocked": "internal error"}
     return {"result": redact(out.message), "sent": out.sent, "blocked": redact(out.reason) if out.reason else None}
 
 
 def create_app(modes: dict[str, Mode], handle_detailed, token: str, bus: EventBus,
-               redact: Callable[[str], str] | None = None) -> FastAPI:
+               redact: Callable[[str], str] | None = None, bind: BindSettings | None = None,
+               deployment: str = LOCAL) -> FastAPI:
     if not _valid_token(token):
         raise ValueError("invalid api token")
     redact = redact or make_redactor(modes)
@@ -204,21 +212,22 @@ def create_app(modes: dict[str, Mode], handle_detailed, token: str, bus: EventBu
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None,
                   dependencies=[Depends(_auth_dependency(token))])
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(LOOPBACK))
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(bind.allowed_hosts if bind else LOOPBACK_ALLOWED))
     app.state.exiting = exiting
 
     @app.get("/health")
     def health() -> dict:
-        return health_view(modes)
+        return health_view(modes, deployment)
 
     @app.post("/utterance")
     def utterance(req: UtteranceIn) -> dict:
         reply = handle_detailed(req.text, "voice", voice_mode=req.mode, mode_confirmed=req.mode_confirmed)
-        return {"reply": redact(reply.text), "mode_used": reply.mode, "needs_mode": reply.needs_mode}
+        return {"reply": redact(reply.text), "mode_used": reply.mode, "needs_mode": reply.needs_mode,
+                "suggested_mode": reply.suggested_mode}
 
     @app.get("/outbox")
     def list_outbox(mode: ModeName = Query(...)) -> dict:
-        return {"items": redact_obj(outbox_view(modes[mode]), redact)}
+        return {"items": redact_obj(outbox_view(_served(modes, mode)), redact)}
 
     @app.post("/approve")
     def approve(req: ApproveIn) -> dict:
@@ -244,12 +253,14 @@ class _Server(uvicorn.Server):
         super().handle_exit(sig, frame)
 
 
-def server_config(app: FastAPI, settings: dict) -> uvicorn.Config:
-    if settings.get("host") != HOST:
-        raise ValueError("the API binds 127.0.0.1 only")
-    return uvicorn.Config(app, host=HOST, port=settings["port"], log_level="info", proxy_headers=False,
-                          server_header=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS)
+def server_config(app: FastAPI, settings: BindSettings) -> uvicorn.Config:
+    """log_config=None: uvicorn logs propagate to the root handler, so they pass the content filter too."""
+    if not is_safe_bind_host(settings.host):
+        raise ValueError("the API binds 127.0.0.1 or a Tailscale 100.64.0.0/10 address only, never 0.0.0.0")
+    return uvicorn.Config(app, host=settings.host, port=settings.port, log_level="info", proxy_headers=False,
+                          server_header=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
+                          log_config=None)
 
 
-def serve(app: FastAPI, settings: dict) -> None:
+def serve(app: FastAPI, settings: BindSettings) -> None:
     _Server(server_config(app, settings), app.state.exiting).run()

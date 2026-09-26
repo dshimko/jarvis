@@ -1,7 +1,8 @@
 """Daemon-side state under ~/.jarvis (WSL ext4, 0600). Nothing here is read from the vault, which the agent
 and Windows can write. Tone flags / reconfirms (M2) and the send log that drives the daily cap (L3)."""
 from __future__ import annotations
-import datetime as dt, json, logging, os, tempfile, threading
+import datetime as dt, fcntl, json, logging, os, tempfile, threading
+from contextlib import contextmanager
 from pathlib import Path
 from . import paths
 
@@ -11,6 +12,7 @@ TONE_FILE = "tone_flags.json"
 SENDS_FILE = "sends.log"
 APPROVE_KEY_FILE = "approve_code.key"
 APPROVE_KEY_LEN = 32
+LOCK_FILE = ".ledger.lock"
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -67,8 +69,19 @@ def _save_tone(data: dict) -> None:
     atomic_write_text(_dir() / TONE_FILE, json.dumps(data, sort_keys=True))
 
 
+@contextmanager
+def _file_lock():
+    """Cross-process lock: on WSL both per-mode daemons share ~/.jarvis (AD4), so a thread lock is not enough."""
+    fd = os.open(_dir() / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)                                      # closing releases the flock
+
+
 def _update(mode: str, item_id: str, entry: dict | None) -> None:
-    with _LOCK:
+    with _LOCK, _file_lock():
         data = _load_tone()
         per_mode = {k: v for k, v in data.get(mode, {}).items() if k != item_id}
         if entry is not None:

@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# Jarvis AWS bootstrap entry point (cloud-init user_data). Keep this file tiny (PLAN.md AD18):
+# it installs base packages, fetches the ops/aws/ bootstrap tarball, verifies it, and hands off
+# to bootstrap.sh. Everything else lives in ops/aws/. cloud-init already tees this script's
+# stdout/stderr to /var/log/cloud-init-output.log; no extra redirection is added here.
+#
+# shellcheck disable=SC2154
+# (artifacts_bucket, bootstrap_key, bootstrap_sha256, region, instance_type,
+# tailscale_secret_id, auto_reboot_time_utc below are Terraform template vars, not shell)
+set -euo pipefail
+
+readonly ARTIFACTS_BUCKET="${artifacts_bucket}"
+readonly BOOTSTRAP_KEY="${bootstrap_key}"
+readonly BOOTSTRAP_SHA256="${bootstrap_sha256}"
+readonly AWS_REGION="${region}"
+readonly INSTANCE_TYPE="${instance_type}"
+readonly TAILSCALE_SECRET_ID="${tailscale_secret_id}"
+readonly AUTO_REBOOT_TIME_UTC="${auto_reboot_time_utc}"
+readonly BOOTSTRAP_DIR="/opt/jarvis/bootstrap/$BOOTSTRAP_SHA256"
+
+log() { echo "[user-data] $*"; }
+
+export DEBIAN_FRONTEND=noninteractive
+# G1: every gpg call below passes --homedir explicitly, but unset any ambient GNUPGHOME too so
+# there is no dependency on gpg's default homedir at all.
+unset GNUPGHOME
+
+# L4: pre-seed debconf BEFORE installing iptables-persistent -- its postinst script (which reads
+# these values) runs as part of `apt-get install`, so seeding after that point is too late and
+# the install would still prompt.
+echo iptables-persistent iptables-persistent/autosave_v4 boolean false | debconf-set-selections
+echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
+
+log "installing base packages"
+apt-get update -y
+apt-get install -y --no-install-recommends \
+  python3.12 python3.12-venv python3-pip git jq unzip ca-certificates gnupg curl iptables-persistent
+
+arch_deb=$(dpkg --print-architecture)   # amd64 | arm64 (Debian package naming)
+arch_awscli=$(uname -m)                 # x86_64 | aarch64 (awscli zip naming)
+
+log "installing awscli v2 ($arch_awscli)"
+tmp_awscli=$(mktemp -d)
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$arch_awscli.zip" -o "$tmp_awscli/awscliv2.zip"
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$arch_awscli.zip.sig" -o "$tmp_awscli/awscliv2.zip.sig"
+
+# M9: verify the awscli zip against the AWS CLI Team's published PGP key before running its
+# installer. Key text is from AWS's own documentation (there is no separate fetchable URL for
+# this one, unlike the CloudWatch agent's key below), imported into an ephemeral keyring scoped
+# to this operation only, and its fingerprint is checked before it is trusted for verification.
+# Used inside the Terraform-escaped $${...} below (VALIDSIG grep); shellcheck parses $$ as the
+# PID special parameter when checking this file unrendered, so it cannot see that reference.
+# shellcheck disable=SC2034
+readonly AWSCLI_GPG_FINGERPRINT="FB5D B77F D5C1 18B8 0511  ADA8 A631 0ACC 4672 475C"
+cat > "$tmp_awscli/awscli-public-key.asc" <<'AWSCLI_PUBKEY'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBF2Cr7UBEADJZHcgusOJl7ENSyumXh85z0TRV0xJorM2B/JL0kHOyigQluUG
+ZMLhENaG0bYatdrKP+3H91lvK050pXwnO/R7fB/FSTouki4ciIx5OuLlnJZIxSzx
+PqGl0mkxImLNbGWoi6Lto0LYxqHN2iQtzlwTVmq9733zd3XfcXrZ3+LblHAgEt5G
+TfNxEKJ8soPLyWmwDH6HWCnjZ/aIQRBTIQ05uVeEoYxSh6wOai7ss/KveoSNBbYz
+gbdzoqI2Y8cgH2nbfgp3DSasaLZEdCSsIsK1u05CinE7k2qZ7KgKAUIcT/cR/grk
+C6VwsnDU0OUCideXcQ8WeHutqvgZH1JgKDbznoIzeQHJD238GEu+eKhRHcz8/jeG
+94zkcgJOz3KbZGYMiTh277Fvj9zzvZsbMBCedV1BTg3TqgvdX4bdkhf5cH+7NtWO
+lrFj6UwAsGukBTAOxC0l/dnSmZhJ7Z1KmEWilro/gOrjtOxqRQutlIqG22TaqoPG
+fYVN+en3Zwbt97kcgZDwqbuykNt64oZWc4XKCa3mprEGC3IbJTBFqglXmZ7l9ywG
+EEUJYOlb2XrSuPWml39beWdKM8kzr1OjnlOm6+lpTRCBfo0wa9F8YZRhHPAkwKkX
+XDeOGpWRj4ohOx0d2GWkyV5xyN14p2tQOCdOODmz80yUTgRpPVQUtOEhXQARAQAB
+tCFBV1MgQ0xJIFRlYW0gPGF3cy1jbGlAYW1hem9uLmNvbT6JAlQEEwEIAD4CGwMF
+CwkIBwIGFQoJCAsCBBYCAwECHgECF4AWIQT7Xbd/1cEYuAURraimMQrMRnJHXAUC
+akV0ygUJDqP4lQAKCRCmMQrMRnJHXFHjD/9eyZLYcKuQOlLvtqSDtUBiEZf6ZZjM
+i3ygYH8rJNtuToUH+HvSpe819urJCquXhDrlK6N+aqW0hCLtNABJG/vsafIgvIYJ
+hSGgpgtNnQyMV1jViRWqPjbouw8OkYKBThUfT1i2Y+wn58ifs6ODBCmTexWtXspA
+Si+Gt49xDOW0APmbOPnI+a4HJW6tVEo6MWS0WjzpiBayR3d1A4pt4YrPfSdDgpLo
+h2SLQqlRqvvVZJaWBjhkErNFpfsBA06sDcPEOb0G8LBUbR4WOcdvhe5LubJbZuxC
+AG9kNPCVeQP1ixwjgjXKysaxeQ6rv0VzIQgRp6tLVLWhy6AKDNvLjFSsmXZ1Wl08
+Y/RlOHXlzLuQMRE6sR1wOdRxc9TsrNWTGiBK65cvSWOy03JeBkQQ8pesqltiyxI9
+U21kkgiXtTSKNGfKK8pO27D81YANhRqPK7iTp6kuFiY2WtOg90KTMNlIT+Ff85Y2
+b1rHj6Z0SrCkJujhWk3IBPic/wJgz01LEc/OAdUPlby90RJZcIBhSlWhT7mXnXIO
+c0HWlNQrns2s3CTyYwZSiSlYe9ApeLwhjDo8NhbFuCAy61l6O5UsR4AfZxx/rGKv
+2wFb1/RN/P4gNe6vmxZAPjR0AQcwD3tc2McimOLr/22kmPz8IH3I0X7WoSFr0Biz
+E91G7bb0hOb/cA==
+=knv7
+-----END PGP PUBLIC KEY BLOCK-----
+AWSCLI_PUBKEY
+# G1: gpg only auto-creates a homedir whose basename is literally ".gnupg"; "gnupg" (no dot)
+# is not special-cased, so the directory must exist before --import or it fails and set -e
+# aborts first boot.
+install -d -m 0700 "$tmp_awscli/gnupg"
+gpg --batch --no-autostart --homedir "$tmp_awscli/gnupg" --import "$tmp_awscli/awscli-public-key.asc"
+# G2: bind verification to the expected key specifically (VALIDSIG's fingerprint), not merely to
+# "some key in this keyring" -- stronger than a separate --fingerprint presence check.
+# Captured into a variable rather than piped to `grep -q`: -q exits at the first match, which
+# can SIGPIPE gpg while it is still writing status lines, and under `set -o pipefail` that turns
+# a genuinely valid signature into a failed pipeline.
+awscli_sig_status=$(gpg --batch --no-autostart --homedir "$tmp_awscli/gnupg" --status-fd 1 \
+  --verify "$tmp_awscli/awscliv2.zip.sig" "$tmp_awscli/awscliv2.zip" 2>&1)
+grep -q "VALIDSIG $${AWSCLI_GPG_FINGERPRINT// /}" <<<"$awscli_sig_status"
+
+unzip -q "$tmp_awscli/awscliv2.zip" -d "$tmp_awscli"
+"$tmp_awscli/aws/install" --update
+rm -rf "$tmp_awscli"
+
+log "installing Node LTS from NodeSource"
+tmp_node=$(mktemp)
+curl -fsSL https://deb.nodesource.com/setup_lts.x -o "$tmp_node"
+bash "$tmp_node"
+rm -f "$tmp_node"
+apt-get install -y nodejs
+
+log "installing Syncthing from the official apt repo"
+install -d -m 0755 /etc/apt/keyrings
+curl -fsSL -o /etc/apt/keyrings/syncthing-archive-keyring.gpg https://syncthing.net/release-key.gpg
+echo "deb [signed-by=/etc/apt/keyrings/syncthing-archive-keyring.gpg] https://apt.syncthing.net/ syncthing stable" \
+  > /etc/apt/sources.list.d/syncthing.list
+apt-get update -y
+apt-get install -y syncthing
+
+log "installing Tailscale from the official apt repo"
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg \
+  -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list \
+  -o /etc/apt/sources.list.d/tailscale.list
+apt-get update -y
+apt-get install -y tailscale
+
+log "installing the CloudWatch agent ($arch_deb)"
+tmp_cwa=$(mktemp -d)
+curl -fsSL \
+  "https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/$arch_deb/latest/amazon-cloudwatch-agent.deb" \
+  -o "$tmp_cwa/amazon-cloudwatch-agent.deb"
+curl -fsSL \
+  "https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/$arch_deb/latest/amazon-cloudwatch-agent.deb.sig" \
+  -o "$tmp_cwa/amazon-cloudwatch-agent.deb.sig"
+
+# M9: verify against Amazon's published key, fetched from the documented AWS URL (unlike the
+# awscli key above, this one really is served over HTTPS), fingerprint-checked before use.
+# Used inside the Terraform-escaped $${...} below, same reasoning as AWSCLI_GPG_FINGERPRINT above.
+# shellcheck disable=SC2034
+readonly CWAGENT_GPG_FINGERPRINT="9376 16F3 450B 7D80 6CBD  9725 D581 6730 3B78 9C72"
+curl -fsSL https://amazoncloudwatch-agent.s3.amazonaws.com/assets/amazon-cloudwatch-agent.gpg \
+  -o "$tmp_cwa/amazon-cloudwatch-agent.gpg"
+# G1: same as the awscli key above -- "gnupg" (no dot) is not gpg's auto-created homedir name.
+install -d -m 0700 "$tmp_cwa/gnupg"
+gpg --batch --no-autostart --homedir "$tmp_cwa/gnupg" --import "$tmp_cwa/amazon-cloudwatch-agent.gpg"
+# G2: same VALIDSIG binding as the awscli key above, for symmetry. Same capture-into-a-variable
+# reasoning: avoids `grep -q` SIGPIPE-ing gpg mid-write under `set -o pipefail`.
+cwagent_sig_status=$(gpg --batch --no-autostart --homedir "$tmp_cwa/gnupg" --status-fd 1 \
+  --verify "$tmp_cwa/amazon-cloudwatch-agent.deb.sig" "$tmp_cwa/amazon-cloudwatch-agent.deb" 2>&1)
+grep -q "VALIDSIG $${CWAGENT_GPG_FINGERPRINT// /}" <<<"$cwagent_sig_status"
+
+dpkg -i "$tmp_cwa/amazon-cloudwatch-agent.deb"
+rm -rf "$tmp_cwa"
+
+log "fetching bootstrap tarball s3://$ARTIFACTS_BUCKET/$BOOTSTRAP_KEY"
+install -d -m 0700 "$BOOTSTRAP_DIR"
+tmp_tar=$(mktemp -d)
+aws s3 cp "s3://$ARTIFACTS_BUCKET/$BOOTSTRAP_KEY" "$tmp_tar/bootstrap.tar.gz" --region "$AWS_REGION"
+echo "$BOOTSTRAP_SHA256  $tmp_tar/bootstrap.tar.gz" | sha256sum -c -
+tar -xzf "$tmp_tar/bootstrap.tar.gz" -C "$BOOTSTRAP_DIR"
+rm -rf "$tmp_tar"
+chmod 0700 "$BOOTSTRAP_DIR"
+chmod 0700 "$BOOTSTRAP_DIR/bootstrap.sh"
+
+log "persisting region for ops/aws tools (AD34: region literals leave every script)"
+install -d -m 0755 /etc/jarvis
+printf '%s' "$AWS_REGION" > /etc/jarvis/region
+chmod 0644 /etc/jarvis/region
+export JARVIS_REGION="$AWS_REGION"
+
+log "running bootstrap.sh"
+JARVIS_ARTIFACTS_BUCKET="$ARTIFACTS_BUCKET" \
+JARVIS_INSTANCE_TYPE="$INSTANCE_TYPE" \
+JARVIS_TAILSCALE_SECRET_ID="$TAILSCALE_SECRET_ID" \
+JARVIS_AUTO_REBOOT_TIME="$AUTO_REBOOT_TIME_UTC" \
+  "$BOOTSTRAP_DIR/bootstrap.sh"

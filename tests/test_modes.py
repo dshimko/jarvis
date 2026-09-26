@@ -1,9 +1,9 @@
-"""modes.load_modes (B1, B7, C2, shared-secret guard) and paths helpers (B5)."""
+"""modes.load_mode (B1, B7, C2) and paths helpers (B5). The shared-secret guard is tests/test_secrets_check.py."""
 import os
 from pathlib import Path
 import pytest
 from jarvis import paths
-from jarvis.modes import CFG, check_env_file, load_modes, make_redactor
+from jarvis.modes import CFG, check_env_file, load_mode, make_redactor
 
 
 def write_env(root: Path, name: str, lines: dict, mode: int = 0o600) -> Path:
@@ -18,6 +18,10 @@ def envs(root):
     write_env(root, "work", {"SLACK_WORK_TOKEN": "work-token-abcdef12", "JEV_API_KEY": "same-jev-key-123"})
     write_env(root, "personal", {"OFW_MCP_TOKEN": "ofw-token-abcdef34", "JEV_API_KEY": "same-jev-key-123"})
     return root
+
+
+def load_modes(root, cfg):
+    return {name: load_mode(name, root, cfg) for name in ("work", "personal")}
 
 
 def test_load_modes_expands_win_home(envs, home, tmp_path, monkeypatch):
@@ -74,18 +78,10 @@ def test_missing_env_file_allowed(root, home, tmp_path, monkeypatch):
     assert load_modes(root=root, cfg=CFG)["work"].env == {}
 
 
-def test_shared_secret_refused(root, home, tmp_path, monkeypatch):
-    monkeypatch.setenv("JARVIS_WIN_HOME", str(tmp_path))
-    write_env(root, "work", {"GMAIL_TOKEN": "shared-value-123456"})
-    write_env(root, "personal", {"GMAIL_TOKEN": "shared-value-123456"})
-    with pytest.raises(SystemExit, match="shared across modes"):
-        load_modes(root=root, cfg=CFG)
-
-
 def test_literal_secret_in_mcp_config_refused(envs, home, tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_WIN_HOME", str(tmp_path))
     cfg_path = envs / "mcp" / "personal.mcp.json"
-    cfg_path.write_text(cfg_path.read_text().replace("${OFW_MCP_TOKEN}", "work-token-abcdef12"))
+    cfg_path.write_text(cfg_path.read_text().replace("${OFW_MCP_TOKEN}", "ofw-token-abcdef34"))
     with pytest.raises(SystemExit, match="literal secret"):
         load_modes(root=envs, cfg=CFG)
 

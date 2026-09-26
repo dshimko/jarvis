@@ -1,8 +1,10 @@
 # Jarvis
 
 Personal and work assistant built on Obsidian (memory), Claude Code (brain and subagents), Jev
-(fast routing and safety checks), MCP (hands), and local speech. The brain runs headless in WSL2
-Ubuntu under systemd; the UI is a native Windows tray app that talks to it over loopback HTTP.
+(fast routing and safety checks), MCP (hands), and local speech. The brain runs headless under
+systemd, either in WSL2 Ubuntu (development) or on a dedicated EC2 instance (always-on, see
+"Deployments" below); the UI is a native Windows tray app that talks to it over loopback HTTP or
+Tailscale.
 
 ## Shape
 
@@ -38,10 +40,17 @@ args from the file.
 1. Each `claude -p` runs with cwd in its own vault, `--mcp-config` pointed at the repo's copy for
    that mode, and `--strict-mcp-config` (ignores any user/global MCP servers).
 2. Subprocess env contains only that mode's secrets plus a fixed passthrough list (`PATH`, `HOME`,
-   `USER`, `LANG`, `SHELL`, `TMPDIR`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`). The other
-   mode's tokens do not exist in the process.
-3. Startup fails if any secret value appears in both env files, or if an env file lives under
-   `/mnt/` (Windows FS) or is group/world readable.
+   `USER`, `LANG`, `SHELL`, `TMPDIR`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`). Each mode
+   runs as its own daemon (`python -m jarvis.main --mode work|personal`) that opens only its own env
+   file, so the other mode's tokens do not exist in the process.
+3. A secret value that appears in both env files, or any env value written literally into
+   `mcp/work.mcp.json` or `mcp/personal.mcp.json`, stops the daemons from starting: every
+   `jarvis@<mode>` start first runs `python -m jarvis.secrets_check env/work.env env/personal.env` as a
+   separate process (`ExecStartPre`), and `install_wsl.sh` runs the same check and leaves the units
+   disabled on a violation. The daemon itself never opens the other mode's env file; it still refuses to
+   start if its own MCP config holds one of its own values, or if its env file lives under `/mnt/`
+   (Windows FS) or is group/world readable. On AWS the root `jarvis-secrets` tool refuses to write
+   either env file on a shared value.
 4. Tool path denies (`jarvis/brain.py`) block reads and writes outside a session's own vault: the
    other mode's vault, the repo (env files, MCP configs), `~/.claude`, `~/.claude.json`,
    `~/.jarvis`, `~/.ssh`, `/proc`, `/run/user`, `/dev/shm`, and `%LOCALAPPDATA%\Jarvis`. Deny wins
@@ -58,19 +67,48 @@ args from the file.
 7. Daemon-side state under `~/.jarvis` (0600, WSL ext4, never in the vault): the tone-flag ledger
    (`tone_flags.json`) and the send ledger (`sends.log`) that drives the daily write cap and the
    "sent"/"failed" bookkeeping the vault agent cannot influence.
-8. The API binds `127.0.0.1` only (config can change just the port; a non-loopback host is a
-   startup error), requires a bearer token (32 random bytes, `hmac.compare_digest`, never logged),
-   and has no CORS middleware plus a `TrustedHostMiddleware` allowing only `localhost`/`127.0.0.1`.
+8. Each daemon's API binds exactly one address: `127.0.0.1` locally (work 8781, personal 8782), the
+   Tailscale IPv4 on AWS (no Tailscale address is a startup error, never a fallback to `0.0.0.0`); a
+   configured `api.host` is a startup error. It requires a bearer token (32 random bytes, `hmac.compare_digest`, never logged),
+   and has no CORS middleware plus a `TrustedHostMiddleware` allowing only `localhost`/`127.0.0.1`
+   (AWS: the Tailscale IP, `jarvis`, and `*.ts.net`).
 9. Every string the API can return (`/health`, `/utterance`, `/outbox`, `/approve`, SSE events)
-   passes through `redact()`, which replaces any env value (length >= 8) from either mode with
+   passes through `redact()`, which replaces any env value (length >= 8) of the daemon's mode with
    `[redacted]`.
+10. **AWS only: one OS user per mode, not just a subprocess.** `jarvis-work` (uid 2001) and
+    `jarvis-personal` (uid 2002) are separate Linux users, each with its own home (0700), systemd
+    unit, and Syncthing instance. Root-only IMDS access (iptables, checked at every boot), a
+    root-only secrets-sync service, `hidepid=invisible` on `/proc`, and `ProtectProc=invisible` on
+    every mode unit keep one mode's env, OAuth tokens, and process list unreadable to the other --
+    a stronger boundary than the local WSL per-daemon isolation above, which relies on one Linux
+    user running two separate daemons. See `infra/RUNBOOK.md`.
 
 **Residual risk (read this plainly):** any process running as the *same Windows user* can reach
 WSL files via `\\wsl.localhost\Ubuntu\...` or `wsl.exe -u root cat ...`. WSL is not a security
 boundary against that user. The guarantee Jarvis gives is narrower: no secret is *stored on* the
 Windows filesystem, *held by* the Windows client, or *returned by* the API.
 
-## Setup
+## Deployments
+
+Two ways to run Jarvis, same app code and the same safety behavior either way:
+
+- **Local WSL2 (development).** One Windows box, WSL2 Ubuntu, two systemd **user** units,
+  `jarvis@work` and `jarvis@personal`, each bound to `127.0.0.1` on its own port (`8781` work,
+  `8782` personal). Each unit's `ExecStartPre` runs `jarvis.secrets_check` before every start, so a
+  secret shared across modes fails the start instead of leaking. See "Setup" below.
+- **AWS (always-on).** One EC2 instance, `jarvis-work` and `jarvis-personal` as separate Linux OS
+  users (isolation item 10 above), APIs reachable only over Tailscale, secrets in AWS Secrets
+  Manager, deploys and rollbacks over SSM. Full procedure, start to finish, in
+  [`infra/RUNBOOK.md`](infra/RUNBOOK.md).
+
+Logging is the same on both: structured JSON, one object per line, with content fields (body,
+text, draft, preview, snippet, subject, transcript, and more) dropped before any handler ever
+sees them -- nothing but ids, event types, durations, status, and error class ever leaves the
+process, let alone the machine.
+
+## Setup (local WSL, development)
+
+For the AWS always-on deployment, skip to [`infra/RUNBOOK.md`](infra/RUNBOOK.md) instead.
 
 1. **WSL2 + systemd.** Install WSL2 Ubuntu. Make systemd PID 1 by adding to `/etc/wsl.conf`:
    ```
@@ -85,7 +123,7 @@ Windows filesystem, *held by* the Windows client, or *returned by* the API.
    templates to `%USERPROFILE%\Vaults\Jarvis-{Work,Personal}`, creates the env files from their
    `.example`s, installs the systemd user unit, and enables linger so the service survives logout.
 4. Fill in real secrets: `env/work.env` and `env/personal.env`.
-5. Start the daemon: `systemctl --user start jarvis`.
+5. Start the daemons: `systemctl --user start jarvis@work jarvis@personal`.
 6. In **each** vault directory, run `claude` once and use `/mcp` to authorize OAuth servers
    (Atlassian, ClickUp). A browser should open on Windows automatically; if it doesn't, `sudo apt
    install wslu` (for `wslview`) or copy the printed URL into a Windows browser by hand -- the
@@ -102,7 +140,7 @@ Windows filesystem, *held by* the Windows client, or *returned by* the API.
 
 Run these once, from Windows -- they can't be exercised from a Mac:
 
-- `curl.exe -H "Authorization: Bearer $(Get-Content $env:LOCALAPPDATA\Jarvis\api_token)" http://localhost:8765/health`
+- `curl.exe -H "Authorization: Bearer $(Get-Content $env:LOCALAPPDATA\Jarvis\api_token)" http://localhost:8781/health` (work) and the same on `8782` (personal)
 - The hotkeys: Ctrl+Alt+W (work) and Ctrl+Alt+P (personal) start/stop a recording; a beep marks
   the start, the tray icon changes color while recording and while the daemon thinks.
 - Say (or type in Slack/Telegram) "what's pending" / "pending" and confirm you get a reply.
@@ -125,17 +163,18 @@ approval only happens through the tray's read-back + confirm flow (say "approve 
 
 ## Operations
 
-- **Logs.** Daemon: `journalctl --user -u jarvis`. Client: `%LOCALAPPDATA%\Jarvis\client.log`
+- **Logs.** Daemons: `journalctl --user -u jarvis@work` and `-u jarvis@personal` (one JSON object per
+  line; content fields are dropped before any handler, `JARVIS_LOG_FORMAT=text` for readable dev output). Client: `%LOCALAPPDATA%\Jarvis\client.log`
   (never contains utterance, reply, or read-back text -- only event kinds, modes, lengths, and
   status codes).
-- **Restart.** `systemctl --user restart jarvis`, or the tray menu's "restart the WSL daemon".
+- **Restart.** `systemctl --user restart jarvis@work jarvis@personal`, or the tray menu's "restart the WSL daemon".
 - **Clock drift.** The WSL2 clock can drift after Windows sleep/resume; if schedules or the daily
   cap look off, run `sudo hwclock -s` inside WSL.
 - **Idling.** The WSL VM idles out when no Windows process is attached to it. `install.ps1` can
   set `vmIdleTimeout=-1` in `.wslconfig` (Windows 11, WSL >= 2.0.0 only); independent of that, the
   tray keeps one hidden `wsl.exe -d <distro> -e sleep infinity` child alive the whole time it runs,
   so the VM (and the daemon) stays up even without the `.wslconfig` change.
-- **Networking.** The API binds `127.0.0.1` only, by design -- a non-loopback host is a startup
+- **Networking.** Locally each API binds `127.0.0.1` only, by design -- a non-loopback host is a startup
   error, since mirrored networking would expose `0.0.0.0` to the LAN. If localhost forwarding from
   Windows to WSL2 ever stops working, `networkingMode=mirrored` in `.wslconfig` is the fallback,
   but only as a last resort: the API's loopback bind is what keeps it off the LAN, so mirrored mode

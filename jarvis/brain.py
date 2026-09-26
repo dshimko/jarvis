@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from . import paths
+from .logsetup import log_event
 from .modes import Mode
 
 log = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ def _run(cmd: list[str], cwd: Path, env: dict, timeout: int) -> subprocess.Compl
     except subprocess.TimeoutExpired:
         return "Claude Code timed out."
     except OSError as e:
-        log.error("claude failed to start: %s", e)
+        log_event(log, "claude_start_error", logging.ERROR, error_class=type(e).__name__)
         return "Claude Code could not start."
 
 
@@ -201,4 +202,4 @@ def _log(mode: Mode, prompt: str, rc: int) -> None:
         with open(logs / "runs.log", "a", encoding="utf-8") as f:
             f.write(line)
     except OSError as e:
-        log.warning("could not write runs.log for %s: %s", mode.name, e)
+        log_event(log, "runs_log_error", logging.WARNING, error_class=type(e).__name__)

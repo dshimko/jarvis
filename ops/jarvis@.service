@@ -1,0 +1,26 @@
+# Jarvis on WSL: one user unit per mode (PLAN AD4, AD13). Installed by install_wsl.sh, which replaces
+# __JARVIS_DIR__ and enables jarvis@work (127.0.0.1:8781) and jarvis@personal (127.0.0.1:8782).
+# The AWS system unit is a different file under ops/aws/ (JARVIS_DEPLOYMENT=aws, one OS user per mode).
+[Unit]
+Description=Jarvis headless daemon (%i mode)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=__JARVIS_DIR__
+# Cross-mode check (shared values, literal secrets in mcp/*.json) in its own process before every start:
+# a violation fails the start, and the daemon itself never opens the other mode's env file.
+ExecStartPre=__JARVIS_DIR__/.venv/bin/python -m jarvis.secrets_check env/work.env env/personal.env
+ExecStart=__JARVIS_DIR__/.venv/bin/python -m jarvis.main --mode %i
+Environment=JARVIS_DEPLOYMENT=local
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=default.target

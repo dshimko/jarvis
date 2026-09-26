@@ -1,0 +1,40 @@
+// Tailnet policy for Jarvis (DESIGN.md 10.5, AD24). HUMAN-OWNED: this file replaces the whole
+// tailnet policy when applied (by Terraform with manage_tailscale_acl = true, or by pasting it
+// into the admin console). Merge any existing rules of your tailnet in here first.
+//
+// Before use, replace REPLACE_ME@example.com with the workstation user's Tailscale login and
+// confirm the group name (DESIGN.md section 12, U2). Tailscale evaluates the "tests" block on
+// save and refuses the policy if any test fails.
+{
+  "groups": {
+    "group:jarvis-workstation": ["REPLACE_ME@example.com"],
+  },
+
+  "tagOwners": {
+    "tag:jarvis": ["autogroup:admin"],
+  },
+
+  // One grant: the workstation group reaches the two APIs and the two Syncthing ports.
+  // Nothing has tag:jarvis as a source, so the server initiates nothing.
+  "grants": [
+    {
+      "src": ["group:jarvis-workstation"],
+      "dst": ["tag:jarvis"],
+      "ip":  ["tcp:8781", "tcp:8782", "tcp:22000", "udp:22000", "tcp:22001", "udp:22001"],
+    },
+  ],
+
+  // Tailscale SSH is off: no "ssh" section.
+
+  "tests": [
+    {
+      "src":    "REPLACE_ME@example.com",
+      "accept": ["tag:jarvis:8781", "tag:jarvis:8782", "tag:jarvis:22000", "tag:jarvis:22001"],
+      "deny":   ["tag:jarvis:22", "tag:jarvis:8384", "tag:jarvis:8385"],
+    },
+    {
+      "src":  "tag:jarvis",
+      "deny": ["REPLACE_ME@example.com:22000", "REPLACE_ME@example.com:22"],
+    },
+  ],
+}
