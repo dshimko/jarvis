@@ -133,3 +133,35 @@ def test_router_prefix():
 
 def test_normalize():
     assert normalize("  What’s   pending?! ") == "What's pending"
+
+
+# ---- AD15: suggested_mode ----
+
+def test_jev_disagreement_suggests_other_mode(modes, jev_scores, no_brain):
+    jev_scores["mode"] = ("personal", 0.99)
+    handle_detailed, _ = make_handler(modes)
+    r = handle_detailed("what did the school email say", "voice", voice_mode="work")
+    assert r.needs_mode and r.suggested_mode == "personal" and r.mode is None
+    assert not no_brain
+
+
+def test_prefix_disagreement_suggests_spoken_mode(modes, jev_scores, no_brain):
+    handle_detailed, _ = make_handler(modes)
+    r = handle_detailed("personal, what did my ex say", "voice", voice_mode="work")
+    assert r.needs_mode and r.suggested_mode == "personal"
+
+
+def test_no_suggestion_when_routed(modes, jev_scores, no_brain):
+    handle_detailed, _ = make_handler(modes)
+    assert handle_detailed("what's on today", "voice", voice_mode="work").suggested_mode is None
+    assert handle_detailed("hi", "email").suggested_mode is None
+
+
+def test_single_mode_daemon_suggests_the_other_endpoint(modes, jev_scores, no_brain):
+    """AD4: a work daemon holds only work; a request for personal is sent back with a suggestion."""
+    handle_detailed, _ = make_handler({"work": modes["work"]})
+    r = handle_detailed("what's pending", "voice", voice_mode="personal")
+    assert r.needs_mode and r.suggested_mode == "personal" and r.mode is None
+    jev_scores["mode"] = ("personal", 0.99)
+    r = handle_detailed("check ofw", "voice", voice_mode="work")
+    assert r.suggested_mode == "personal" and not no_brain

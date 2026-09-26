@@ -4,6 +4,7 @@ import logging, re
 from dataclasses import dataclass
 from typing import Callable
 from . import brain, outbox, router
+from .logsetup import log_event
 from .modes import Mode, make_redactor
 
 log = logging.getLogger(__name__)
@@ -11,6 +12,7 @@ APPROVE = re.compile(r"^(approve|send)\s+([\w-]+)(?:\s+([0-9a-fA-F]{8}))?(\s+rec
 PENDING = {"outbox", "pending", "what's pending", "whats pending", "what is pending", "anything pending"}
 TRAILING = re.compile(r"[\s.?!,;:]+$")
 VOICE_APPROVE_REFUSAL = "Voice approval uses the read-back flow in the tray app. Nothing was sent."
+NOT_SERVED = "That is a {mode} request; this Jarvis serves {served}. Confirm to send it to {mode}."
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,7 @@ class Reply:
     text: str
     mode: str | None
     needs_mode: bool = False
+    suggested_mode: str | None = None       # AD15: the other mode, when routing disagreed with the hotkey
 
 
 def normalize(text: str) -> str:
@@ -46,8 +49,8 @@ def _approve(mode: Mode, item_id: str, code: str | None, reconfirm: bool) -> str
                 "approve without reconfirm first")
     except outbox.Blocked as e:
         return f"Not approved {item_id}: {e}"
-    except Exception:
-        log.exception("approve failed for %s/%s", mode.name, item_id)
+    except Exception as e:
+        log_event(log, "approve_error", logging.ERROR, id=item_id, error_class=type(e).__name__)
         return f"Blocked {item_id}: internal error"
 
 
@@ -81,9 +84,13 @@ def make_handler(modes: dict[str, Mode], redact: Callable[[str], str] | None = N
             if reply is not None:
                 return Reply(redact(reply), voice_mode)
         env = modes[voice_mode].subprocess_env() if voice_mode in modes else {}
-        mode_name, why = router.pick_mode(text, channel, voice_mode, env, mode_confirmed)
+        mode_name, why, suggested = router.pick_route(text, channel, voice_mode, env, mode_confirmed)
         if mode_name is None:
-            return Reply(f"Which mode, work or personal? ({why})", None, needs_mode=True)
+            return Reply(f"Which mode, work or personal? ({why})", None, needs_mode=True, suggested_mode=suggested)
+        if mode_name not in modes:                           # AD4: the other mode is the other daemon
+            served = ", ".join(modes)
+            return Reply(NOT_SERVED.format(mode=mode_name, served=served), None, needs_mode=True,
+                         suggested_mode=mode_name)
         mode = modes[mode_name]
         reply = _control(mode, text, channel)
         if reply is None:

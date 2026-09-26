@@ -174,6 +174,6 @@ def test_schedules_registered(modes):
 
 
 def test_main_args():
-    a = main.parse_args(["--headless", "--no-channels"])
+    a = main.parse_args(["--mode", "work", "--headless", "--no-channels"])
     assert a.headless and a.no_channels
     assert not hasattr(main, "voice")

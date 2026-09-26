@@ -3,6 +3,7 @@ import logging, os, stat
 import pytest
 from fastapi.testclient import TestClient
 from jarvis import api
+from jarvis.bind import BindSettings
 from jarvis.events import EventBus
 from jarvis.handler import make_handler
 from .conftest import TOKEN
@@ -45,6 +46,7 @@ def test_health_ok_with_token(client, modes):
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True and body["modes"]["work"] == {"vault": True, "mcp_config": True, "pending": 0}
+    assert body["deployment"] == "local"
     assert str(modes["work"].vault.parent) not in r.text and "TOKEN" not in r.text   # C4: no paths, no env keys
 
 
@@ -62,23 +64,23 @@ def test_no_docs_or_cors(client):
     assert "access-control-allow-origin" not in r.headers
 
 
-# ---- bind address ----
+# ---- bind address (loopback profile; the tailscale profile is tests/test_api_bind.py) ----
 
 def test_settings_default_loopback():
-    assert api.api_settings({}) == {"host": "127.0.0.1", "port": 8765}
-    assert api.api_settings({"api": {"port": 9000}}) == {"host": "127.0.0.1", "port": 9000}
+    assert api.api_settings({}, "work") == BindSettings("127.0.0.1", 8781, ("127.0.0.1", "localhost"))
+    assert api.api_settings({"api": {"port": 9000}}, "work").port == 9000
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "::", "example.com"])
 def test_non_loopback_host_refused(host):
     with pytest.raises(SystemExit):
-        api.api_settings({"api": {"host": host, "port": 8765}})
+        api.api_settings({"api": {"host": host, "port": 8765}}, "work")
 
 
 @pytest.mark.parametrize("port", [0, 70000, "8765", None])
 def test_bad_port_refused(port):
     with pytest.raises(SystemExit):
-        api.api_settings({"api": {"port": port}})
+        api.api_settings({"api": {"port": port}}, "work")
 
 
 def test_serve_binds_127_0_0_1(modes, monkeypatch):
@@ -88,11 +90,11 @@ def test_serve_binds_127_0_0_1(modes, monkeypatch):
         seen.update(config=self.config, ran=True)
     monkeypatch.setattr(api._Server, "run", fake_run)
     app = api.create_app(modes, make_handler(modes)[0], TOKEN, EventBus())
-    api.serve(app, api.api_settings({"api": {"host": "localhost", "port": 8765}}))
+    api.serve(app, api.api_settings({"api": {"bind": "loopback", "port": 8765}}, "work"))
     assert seen["ran"] and seen["config"].host == "127.0.0.1" and seen["config"].port == 8765
     assert seen["config"].timeout_graceful_shutdown == 5
     with pytest.raises(ValueError):
-        api.server_config(app, {"host": "0.0.0.0", "port": 8765})
+        api.server_config(app, BindSettings("0.0.0.0", 8765, ("localhost",)))
 
 
 # ---- token ----
@@ -127,6 +129,15 @@ def test_token_copied_to_windows(home, tmp_path, monkeypatch):
     assert dest.read_text().strip() == TOKEN
 
 
+@pytest.mark.parametrize("deployment,copied", [("local", True), ("aws", False)])
+def test_token_copied_only_under_local(home, tmp_path, monkeypatch, deployment, copied):
+    """AD6: on AWS the root jarvis-secrets tool publishes the token; the daemon never copies it anywhere."""
+    calls = []
+    monkeypatch.setattr(api, "copy_token_to_windows", lambda token: calls.append(token) or tmp_path / "t")
+    api.share_token(TOKEN, deployment)
+    assert (calls == [TOKEN]) is copied
+
+
 def test_token_copy_skipped_when_windows_unresolvable(home, caplog):
     with caplog.at_level(logging.WARNING):
         assert api.copy_token_to_windows(TOKEN) is None
@@ -140,6 +151,6 @@ def test_create_app_rejects_bad_token(modes):
 
 def test_stop_signal_marks_streams_exiting(modes):
     app = api.create_app(modes, make_handler(modes)[0], TOKEN, EventBus())
-    server = api._Server(api.server_config(app, api.api_settings({})), app.state.exiting)
+    server = api._Server(api.server_config(app, api.api_settings({}, "work")), app.state.exiting)
     server.handle_exit(15, None)
     assert app.state.exiting.is_set() and server.should_exit

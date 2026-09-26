@@ -1,0 +1,15 @@
+# Local (WSL) deployment: one user, vaults on the Windows filesystem, API on loopback (PLAN AD3, AD13).
+# `{mode}` in a path is replaced with the mode name.
+api:
+  bind: loopback          # 127.0.0.1 only
+  ports:
+    work: 8781
+    personal: 8782
+
+modes:
+  work:
+    vault: ${WIN_HOME}/Vaults/Jarvis-Work
+    env_file: env/work.env
+  personal:
+    vault: ${WIN_HOME}/Vaults/Jarvis-Personal
+    env_file: env/personal.env

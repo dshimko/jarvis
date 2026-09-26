@@ -6,6 +6,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from .logsetup import log_event
 
 log = logging.getLogger(__name__)
 SLACK_KEYS = ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_OWNER_USER_ID")
@@ -60,8 +61,8 @@ def start_telegram(mode, handle) -> bool:
             app = Application.builder().token(env["TELEGRAM_BOT_TOKEN"]).build()
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_msg))
             app.run_polling(stop_signals=None)
-        except Exception:
-            log.exception("Telegram channel stopped")
+        except Exception as e:                       # no traceback: it can carry the bot token or a message
+            log_event(log, "telegram_stopped", logging.ERROR, channel="telegram", error_class=type(e).__name__)
 
     threading.Thread(target=run, daemon=True).start()
     return True

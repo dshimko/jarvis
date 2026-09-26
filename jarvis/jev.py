@@ -7,7 +7,7 @@ against current TypeSafe docs and swap in their SDK if you prefer.
 If Jev is unavailable, falls back to Claude Haiku via `claude -p` returning JSON.
 """
 from __future__ import annotations
-import json, logging, subprocess
+import json, logging, os, subprocess
 import httpx
 from . import paths
 from .modes import CFG, base_env
@@ -16,6 +16,9 @@ log = logging.getLogger(__name__)
 JCFG = CFG["jev"]
 NO_HOOKS = json.dumps({"disableAllHooks": True})
 FALLBACK_TIMEOUT = 60
+FALLBACK_CWD = "jev-cwd"
+FALLBACK_DENIED = "Read,Grep,Glob,Bash,WebFetch,WebSearch"
+CLAUDE_AUTH_KEYS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")   # per-mode sign-in alternative (AD23)
 
 
 class Decision(dict):
@@ -36,13 +39,19 @@ def _jev_call(env: dict, state: str, questions: dict) -> dict:
 
 
 def _fallback_cwd():
-    """Neutral cwd for the fallback call: never the repo, never a vault (C9)."""
-    d = paths.jarvis_dir()
+    """Neutral, empty cwd for the fallback call: never the repo, a vault, or ~/.jarvis itself (C9)."""
+    d = paths.jarvis_dir() / FALLBACK_CWD
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(d, 0o700)
     return d
 
 
-def _haiku_fallback(state: str, questions: dict) -> dict:
+def _fallback_env(env: dict | None) -> dict:
+    """The daemon's PASSTHROUGH env plus only the calling mode's Claude credentials, never its tool secrets."""
+    return {**base_env(), **{k: env[k] for k in CLAUDE_AUTH_KEYS if (env or {}).get(k)}}
+
+
+def _haiku_fallback(state: str, questions: dict, env: dict | None = None) -> dict:
     """C9: minimal env, no MCP servers, no hooks, neutral cwd. Any failure here raises (fail closed);
     callers (router: caught broadly; outbox._check_jev: uncaught, blocks the send) must not see a
     permissive default."""
@@ -51,9 +60,9 @@ def _haiku_fallback(state: str, questions: dict) -> dict:
               "for probability questions value is a number 0..1.\n"
               f"QUESTIONS: {json.dumps(questions)}\nSTATE:\n{state}")
     cmd = ["claude", "-p", prompt, "--model", "haiku", "--output-format", "json", "--allowedTools", "",
-           "--strict-mcp-config", "--settings", NO_HOOKS]
+           "--disallowedTools", FALLBACK_DENIED, "--strict-mcp-config", "--settings", NO_HOOKS]
     try:
-        out = subprocess.run(cmd, cwd=_fallback_cwd(), env=base_env(), capture_output=True, text=True,
+        out = subprocess.run(cmd, cwd=_fallback_cwd(), env=_fallback_env(env), capture_output=True, text=True,
                               timeout=FALLBACK_TIMEOUT)
     except subprocess.TimeoutExpired as e:
         raise RuntimeError("jev haiku fallback timed out") from e
@@ -75,7 +84,7 @@ def decide(env: dict, state: str, questions: dict) -> dict[str, Decision]:
         raw = _jev_call(env, state, questions)
         answers = raw.get("answers", raw)
     except Exception:
-        answers = _haiku_fallback(state, questions)
+        answers = _haiku_fallback(state, questions, env)
     return {k: Decision(v if isinstance(v, dict) else {"value": v, "confidence": 0.0}) for k, v in answers.items()}
 
 

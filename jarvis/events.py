@@ -4,6 +4,7 @@ import asyncio, logging, threading
 from pathlib import Path
 from typing import Callable
 from . import outbox, paths
+from .logsetup import log_event
 from .modes import Mode
 
 log = logging.getLogger(__name__)
@@ -13,13 +14,26 @@ TYPES = {"pending_new", "item_sent", "item_blocked", "schedule_done"}
 
 
 class EventBus:
-    """publish() is safe from any thread; events fan out to per-subscriber bounded asyncio queues."""
+    """publish() is safe from any thread; events fan out to per-subscriber bounded asyncio queues (SSE) and to
+    synchronous listeners (Telegram push), which run in the publishing thread and must not block for long."""
 
     def __init__(self, maxsize: int = QUEUE_MAX):
         self._maxsize = maxsize
         self._loop: asyncio.AbstractEventLoop | None = None
         self._subs: set[asyncio.Queue] = set()
+        self._listeners: tuple[Callable[[str, dict], None], ...] = ()
         self._lock = threading.Lock()
+
+    def add_listener(self, fn: Callable[[str, dict], None]) -> None:
+        with self._lock:
+            self._listeners = (*self._listeners, fn)
+
+    def _call_listeners(self, kind: str, data: dict) -> None:
+        for fn in self._listeners:
+            try:
+                fn(kind, dict(data))
+            except Exception as e:
+                log_event(log, "bus_listener_error", logging.ERROR, error_class=type(e).__name__)
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
@@ -37,6 +51,7 @@ class EventBus:
     def publish(self, kind: str, data: dict) -> None:
         if kind not in TYPES:
             raise ValueError(f"unknown event type {kind}")
+        self._call_listeners(kind, data)
         loop = self._loop
         if loop is None or loop.is_closed():
             return  # nobody can be listening yet
@@ -89,7 +104,8 @@ class OutboxPoller(threading.Thread):
             body, path = current[(name, item_id)]
             self.bus.publish("pending_new", {
                 "mode": name, "id": item_id, "first_line": _first_line(body),
-                "obsidian_uri": paths.obsidian_uri(self.modes[name].vault, f"outbox/{path.name}")})
+                "obsidian_uri": paths.obsidian_uri(self.modes[name].vault, f"outbox/{path.name}",
+                                                   self.modes[name].obsidian_vault_name)})
         self._known = frozenset(current)
         return new
 
@@ -98,8 +114,8 @@ class OutboxPoller(threading.Thread):
         while not self._halt.wait(self.interval):
             try:
                 self.poll_once()
-            except Exception:
-                log.exception("outbox poll failed")
+            except Exception as e:
+                log_event(log, "outbox_poll_error", logging.ERROR, error_class=type(e).__name__)
 
     def stop(self) -> None:
         self._halt.set()

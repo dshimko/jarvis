@@ -1,24 +1,20 @@
 """Mode registry. A mode is a hard boundary: its own vault, secrets, MCP config, and tools."""
 from __future__ import annotations
 import logging, os, stat
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
-import yaml
 from dotenv import dotenv_values
 from . import paths
+from .config import ROOT, load_config
 
 log = logging.getLogger(__name__)
-ROOT = Path(__file__).resolve().parent.parent
 MIN_SECRET_LEN = 8
 REDACTED = "[redacted]"
+MODE_PLACEHOLDER = "{mode}"
 
-
-def load_config(path: Path | None = None) -> dict:
-    return yaml.safe_load((path or ROOT / "config.yaml").read_text(encoding="utf-8"))
-
-
+# Resolved at import from JARVIS_DEPLOYMENT / config.yaml (AD3). Shared sections (jev, outbox) come from here.
 CFG = load_config()
 
 # Env vars that must never cross into a subprocess. Everything else from os.environ is dropped too.
@@ -43,6 +39,7 @@ class Mode:
     repos: dict = field(default_factory=dict)
     root: Path = ROOT
     peers: tuple = ()          # the other modes' vault paths, denied to this mode's sessions
+    obsidian_vault_name: str | None = None   # Obsidian's name for the vault when the dir name differs (aws)
 
     @property
     def mcp_config(self) -> Path:
@@ -78,7 +75,7 @@ def secret_values(envs: list[dict]) -> list[str]:
 
 
 def make_redactor(modes: dict[str, Mode]) -> Callable[[str], str]:
-    """C3: replace any env value of either mode (raw or URL-encoded) with [redacted]."""
+    """C3: replace any env value of the given modes (raw or URL-encoded) with [redacted]."""
     needles = []
     for v in secret_values([m.env for m in modes.values()]):
         needles += [v] + ([quote(v, safe="")] if quote(v, safe="") != v else [])
@@ -103,26 +100,33 @@ def check_mcp_config(mode: Mode, secrets: list[str]) -> None:
         raise SystemExit(f"Refusing to start: {mode.mcp_config} contains a literal secret value")
 
 
-def _check_shared(modes: dict[str, Mode]) -> None:
-    w, p = modes["work"].env, modes["personal"].env
-    shared = {k for k in w if k in p and w[k] and w[k] == p[k] and not k.startswith("JEV_")}
-    if shared:
-        raise SystemExit(f"Refusing to start: secrets shared across modes: {sorted(shared)}")
-
-
-def _vault_path(raw: str) -> Path:
+def _vault_path(raw: str, name: str) -> Path:
     try:
-        return Path(paths.expand(raw))
+        return Path(paths.expand(raw.replace(MODE_PLACEHOLDER, name)))
     except ValueError as e:
         log.error("Refusing to start: %s", e)
         raise SystemExit(f"Refusing to start: {e}") from e
 
 
-def _build(name: str, m: dict, root: Path) -> Mode:
-    return Mode(
+def _env_path(raw: str, name: str, root: Path) -> Path:
+    return root / os.path.expanduser(raw.replace(MODE_PLACEHOLDER, name))
+
+
+def _peer_vaults(name: str, cfg: dict) -> tuple[Path, ...]:
+    """The other modes' vaults from their path templates only: their env files are never touched (AD4)."""
+    return tuple(_vault_path(m["vault"], other) for other, m in cfg["modes"].items() if other != name)
+
+
+def load_mode(name: str, root: Path = ROOT, cfg: dict | None = None, profile: str | None = None) -> Mode:
+    """Exactly one Mode. Only this mode's env file is opened; the redactor built from it holds only its secrets."""
+    cfg = cfg if cfg is not None else (load_config(root, profile) if profile else CFG)
+    m = (cfg.get("modes") or {}).get(name)
+    if m is None:
+        raise SystemExit(f"Refusing to start: unknown mode {name!r}")
+    mode = Mode(
         name=name,
-        vault=_vault_path(m["vault"]),
-        env=_load_env(root / m["env_file"]),
+        vault=_vault_path(m["vault"], name),
+        env=_load_env(_env_path(m["env_file"], name, root)),
         channels=m["channels"],
         daily_write_cap=m["daily_write_cap"],
         agents=m["agents"],
@@ -130,16 +134,8 @@ def _build(name: str, m: dict, root: Path) -> Mode:
         write_tools=m["write_tools"],
         repos={k: Path(paths.expand(v)) for k, v in (m.get("repos") or {}).items()},
         root=root,
+        peers=_peer_vaults(name, cfg),
+        obsidian_vault_name=m.get("obsidian_vault_name"),
     )
-
-
-def load_modes(root: Path = ROOT, cfg: dict | None = None) -> dict[str, Mode]:
-    cfg = cfg if cfg is not None else CFG
-    built = {name: _build(name, m, root) for name, m in cfg["modes"].items()}
-    modes = {name: replace(m, peers=tuple(o.vault for o in built.values() if o.name != name))
-             for name, m in built.items()}
-    _check_shared(modes)
-    secrets = secret_values([m.env for m in modes.values()])
-    for m in modes.values():
-        check_mcp_config(m, secrets)
-    return modes
+    check_mcp_config(mode, secret_values([mode.env]))
+    return mode
