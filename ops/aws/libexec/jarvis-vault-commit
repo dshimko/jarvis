@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# jarvis-vault-commit: commits vault changes if any exist. Runs as the mode user (systemd
+# User=jarvis-%i on jarvis-vault-commit@.service, and once at boot via runuser after the vault
+# directory exists); never pushes. infra/DESIGN.md section 6.3.
+set -euo pipefail
+
+cd "$HOME/vault"
+
+self_name="$(id -un)"
+export GIT_AUTHOR_NAME="$self_name"
+export GIT_AUTHOR_EMAIL="$self_name@localhost"
+export GIT_COMMITTER_NAME="$self_name"
+export GIT_COMMITTER_EMAIL="$self_name@localhost"
+
+# H5: nothing else runs `git init`. Lazily initialize on first use so both the boot-time call and
+# the timer-driven one work whether or not the vault has been synced in yet.
+if [ ! -d .git ]; then
+  git init -q
+  git config user.name "$self_name"
+  git config user.email "$self_name@localhost"
+fi
+
+git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -A
+
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+git -c core.hooksPath=/dev/null -c core.fsmonitor=false commit -q -m "auto: vault snapshot"

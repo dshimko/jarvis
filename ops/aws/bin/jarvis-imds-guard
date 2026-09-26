@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# jarvis-imds-guard: verifies the IMDS iptables rule is loaded and, in full mode, that neither
+# mode user can reach IMDS (infra/DESIGN.md section 6.5).
+#
+# --rules-only: used during first-boot bootstrap, before jarvis-work/jarvis-personal exist. Only
+# checks that the iptables rule itself is present and that root can still reach IMDS.
+# Full mode (default; used by jarvis-imds-guard.service on every boot, and by bootstrap.sh once
+# the mode users have been created): also asserts jarvis-work is uid 2001 and jarvis-personal is
+# uid 2002, then that curl as each user exits 7 (connection refused) against IMDS. The uid/curl
+# assert must never run before the mode users exist -- callers select that with --rules-only.
+set -euo pipefail
+
+rules_only=0
+if [ "${1:-}" = "--rules-only" ]; then
+  rules_only=1
+fi
+
+log() { printf '[jarvis-imds-guard] %s\n' "$*"; }
+fail() { log "FAIL: $*"; logger -p auth.crit "jarvis-imds-guard: $*" 2>/dev/null || true; exit 1; }
+
+check_rules_present() {
+  iptables -C OUTPUT -d 169.254.169.254/32 -m owner --uid-owner 0 -j ACCEPT 2>/dev/null &&
+  iptables -C OUTPUT -d 169.254.169.254/32 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null &&
+  ip6tables -C OUTPUT -d fd00:ec2::254/128 -m owner --uid-owner 0 -j ACCEPT 2>/dev/null &&
+  ip6tables -C OUTPUT -d fd00:ec2::254/128 -j REJECT --reject-with icmp6-port-unreachable 2>/dev/null
+}
+
+if ! check_rules_present; then
+  # L3: restore from the saved rules files with --noflush, not a full netfilter-persistent
+  # reload, so tailscaled's own dynamically-inserted chains are not wiped out in the process.
+  log "iptables rule missing, restoring from /etc/iptables and rechecking once"
+  iptables-restore --noflush < /etc/iptables/rules.v4 || true
+  ip6tables-restore --noflush < /etc/iptables/rules.v6 || true
+  check_rules_present || fail "IMDS iptables rule missing after restore"
+fi
+log "PASS: iptables IMDS rule present"
+
+# H2: bounded retry (10 tries, 3s apart) so a reboot before DHCP/routing has settled does not
+# take down every unit that Requires= this one.
+check_root_imds() {
+  local tries=0
+  while [ "$tries" -lt 10 ]; do
+    if curl -s -m 2 -X PUT http://169.254.169.254/latest/api/token \
+        -H 'X-aws-ec2-metadata-token-ttl-seconds: 30' >/dev/null; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    sleep 3
+  done
+  return 1
+}
+
+check_root_imds || fail "root could not reach IMDS after 10 tries"
+log "PASS: root can reach IMDS"
+
+if [ "$rules_only" -eq 1 ]; then
+  log "PASS: jarvis-imds-guard --rules-only checks complete"
+  exit 0
+fi
+
+assert_user_blocked() {
+  local mode="$1" want_uid="$2" got_uid rc
+  local user="jarvis-$mode"
+  got_uid=$(id -u "$user") || fail "$user does not exist"
+  [ "$got_uid" = "$want_uid" ] || fail "$user uid is $got_uid, expected $want_uid"
+
+  set +e
+  runuser -u "$user" -- curl -s -m 2 -X PUT http://169.254.169.254/latest/api/token \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 30' >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 7 ] || fail "$user reached IMDS or failed with code $rc (want 7, connection refused)"
+  log "PASS: $user blocked from IMDS (curl exit 7)"
+}
+
+assert_user_blocked work 2001
+assert_user_blocked personal 2002
+log "PASS: jarvis-imds-guard full checks complete"

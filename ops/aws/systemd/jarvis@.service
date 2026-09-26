@@ -1,0 +1,54 @@
+[Unit]
+Description=Jarvis %i daemon (AWS)
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service jarvis-secrets.service jarvis-imds-guard.service
+Requires=jarvis-secrets.service jarvis-imds-guard.service
+StartLimitIntervalSec=0
+# Skipped cleanly (not crash-looping) until the first release is deployed and /opt/jarvis/current
+# exists; jarvis-deploy enables/restarts this unit once a release is in place.
+ConditionPathExists=/opt/jarvis/current/.venv/bin/python
+
+[Service]
+Type=simple
+User=jarvis-%i
+Group=jarvis-%i
+WorkingDirectory=/opt/jarvis/current
+Environment=JARVIS_DEPLOYMENT=aws
+Environment=HOME=/home/jarvis-%i
+Environment=PATH=/home/jarvis-%i/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=LANG=C.UTF-8
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/jarvis/current/.venv/bin/python -m jarvis.main --mode %i
+# "-+": "+" runs it as root (needs secretsmanager:PutSecretValue); "-" means a publish failure
+# never fails the daemon itself (H3) -- jarvis-secrets logs its own JSON failure event.
+ExecStartPost=-+/opt/jarvis/bin/jarvis-secrets publish-token %i
+UMask=0077
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+LimitCORE=0
+
+# Hardening (infra/DESIGN.md section 6.3). claude -p <prompt> puts the prompt in argv
+# (brain.build_ask_cmd), so ProtectProc=invisible is load-bearing: without it the other mode's
+# uid could read this daemon's command line from /proc/<pid>/cmdline.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/home/jarvis-%i
+ReadWritePaths=/home/jarvis-%i
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

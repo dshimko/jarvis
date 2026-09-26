@@ -1,0 +1,15 @@
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+-A OUTPUT -d 169.254.169.254/32 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -d 169.254.169.254/32 -j REJECT --reject-with icmp-port-unreachable
+-A OUTPUT -o lo -p tcp -m multiport --dports 8781,8782 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -o lo -p tcp -m multiport --dports 8781,8782 -j REJECT --reject-with tcp-reset
+-A OUTPUT -o lo -p tcp --dport 8384 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 8384 -m owner --uid-owner 2001 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 8384 -j REJECT --reject-with tcp-reset
+-A OUTPUT -o lo -p tcp --dport 8385 -m owner --uid-owner 0 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 8385 -m owner --uid-owner 2002 -j ACCEPT
+-A OUTPUT -o lo -p tcp --dport 8385 -j REJECT --reject-with tcp-reset
+COMMIT

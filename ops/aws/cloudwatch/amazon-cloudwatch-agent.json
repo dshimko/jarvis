@@ -1,0 +1,44 @@
+{
+  "agent": {
+    "run_as_user": "root",
+    "omit_hostname": true,
+    "metrics_collection_interval": 300
+  },
+  "metrics": {
+    "namespace": "Jarvis",
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "metrics_collected": {
+      "disk": {
+        "resources": ["/"],
+        "measurement": ["used_percent"],
+        "drop_device": true
+      }
+    }
+  },
+  "logs": {
+    "force_flush_interval": 15,
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/jarvis/work.jsonl",
+            "log_group_name": "/jarvis/work",
+            "log_stream_name": "{instance_id}"
+          },
+          {
+            "file_path": "/var/log/jarvis/personal.jsonl",
+            "log_group_name": "/jarvis/personal",
+            "log_stream_name": "{instance_id}"
+          },
+          {
+            "file_path": "/var/log/cloud-init-output.log",
+            "log_group_name": "/jarvis/cloud-init",
+            "log_stream_name": "{instance_id}"
+          }
+        ]
+      }
+    }
+  }
+}
