@@ -1,0 +1,2 @@
+# Copy to bootstrap.auto.tfvars (gitignored). No secret values here, ever (brief rule 0.2).
+expected_account_id = "000000000000" # jarvis-prod account id (org/ output account_id)

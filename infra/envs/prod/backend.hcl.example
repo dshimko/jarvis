@@ -1,0 +1,8 @@
+# Copy to backend.hcl (gitignored) and fill in the bucket from `make plan-bootstrap` outputs.
+bucket = "jarvis-tfstate-ACCOUNT_ID"
+key    = "envs/prod/terraform.tfstate"
+region = "us-east-2"
+
+# Leave encrypt and kms_key_id unset: with no SSE headers the bucket's default SSE-KMS
+# (alias/jarvis-tfstate) applies to state and .tflock objects alike. If you do set them, set
+# both, with the full key ARN, or the state bucket policy denies the write.

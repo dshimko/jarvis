@@ -4,7 +4,24 @@ __pycache__/
 env/*.env
 !env/*.env.example
 .pytest_cache/
+.coverage
+.make/
 windows_client/build/
 windows_client/dist/
 *.spec.bak
 .DS_Store
+
+# Terraform (infra/)
+.terraform/
+*.tfstate
+*.tfstate.*
+plan.out
+plan.txt
+infra/**/.build/
+infra/**/backend.hcl
+infra/**/*.tfvars
+!infra/**/*.example
+crash.log
+
+# Local Claude Code worktrees (nested git checkouts, may hold personal vault data)
+.claude/worktrees/
