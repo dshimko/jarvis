@@ -27,7 +27,11 @@ BUILD_DIR="${JARVIS_RELEASE_BUILD_DIR:-$(mktemp -d)}"
 # M4: requirements-lock.txt (uv pip compile --generate-hashes, includes requirements.txt via
 # requirements-dev.txt's own -r line) ships alongside the two source files so jarvis-deploy.sh can
 # `pip install --require-hashes` from it.
-ARCHIVE_PATHS="jarvis requirements.txt requirements-dev.txt requirements-lock.txt pytest.ini tests mcp vaults ops/aws scripts"
+# H1: ops/jarvis@.service and infra/modules/compute/templates/ are read by tests/test_wsl_unit.py
+# and tests/test_ops_aws_static.py respectively -- without them, the on-box `pytest -q` inside
+# jarvis-deploy.sh's build_and_test step fails on every release. tests/test_release_tree.py
+# builds this exact tree and checks it collects cleanly, so a future gap here fails locally too.
+ARCHIVE_PATHS="jarvis requirements.txt requirements-dev.txt requirements-lock.txt pytest.ini tests mcp vaults ops/aws ops/jarvis@.service infra/modules/compute/templates scripts"
 
 log() { printf '[release] %s\n' "$*"; }
 fail() { log "FAIL: $*"; exit 1; }

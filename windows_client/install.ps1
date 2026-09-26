@@ -481,8 +481,12 @@ function Write-ClientConfig {
             'token_secret_personal: jarvis/personal/api-token'
         )
     } else {
+        # L1: api_url (singular, port 8765) is the dead single-daemon field from before AD4/G9
+        # split the daemon per mode; a wsl-profile install now gets the same per-mode urls as aws
+        # (just pointed at localhost, ports 8781/8782), not the old combined one.
         $lines += @(
-            'api_url: http://localhost:8765'
+            'api_url_work: http://localhost:8781'
+            'api_url_personal: http://localhost:8782'
             "token_path: $(Format-YamlScalar (Join-Path $JarvisDir 'api_token'))"
         )
     }

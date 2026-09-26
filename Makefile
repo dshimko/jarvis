@@ -91,6 +91,10 @@ INSTANCE_ID_FILE     := $(MAKE_CACHE_DIR)/instance_id
 MODE                 ?=
 SHA                  ?=
 ROTATE               ?= false
+# H2: per-document timeouts for scripts/ssm-run.sh's poll loop (not the aws CLI's own
+# `wait command-executed`, which is capped at 100s regardless -- too short for a real deploy).
+SSM_DEPLOY_TIMEOUT_S  ?= 1800
+SSM_DEFAULT_TIMEOUT_S ?= 300
 
 .PHONY: release deploy status restart secrets-sync sync-agents oauth-login test clean
 
@@ -117,7 +121,7 @@ deploy: $(INSTANCE_ID_FILE) ## make deploy SHA=<short-or-full sha>; resolved loc
 	  test -n "$$resolved" || { echo "SHA=$(SHA) is not a known commit in this repo"; exit 1; }; \
 	  echo "resolved $(SHA) -> $$resolved"; \
 	  AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
-	    scripts/ssm-run.sh jarvis-deploy "$$(cat $(INSTANCE_ID_FILE))" --parameters Sha=$$resolved; \
+	    scripts/ssm-run.sh jarvis-deploy "$$(cat $(INSTANCE_ID_FILE))" $(SSM_DEPLOY_TIMEOUT_S) --parameters Sha=$$resolved; \
 	  bucket="$(ARTIFACTS_BUCKET)"; \
 	  if [ -z "$$bucket" ]; then \
 	    bucket="jarvis-artifacts-$$(AWS_PROFILE=$(OPERATOR_AWS_PROFILE) $(AWS) sts get-caller-identity --query Account --output text --region $(AWS_REGION))"; \
@@ -127,16 +131,16 @@ deploy: $(INSTANCE_ID_FILE) ## make deploy SHA=<short-or-full sha>; resolved loc
 
 status: $(INSTANCE_ID_FILE) ## service states, heartbeat, outbox counts, disk, tailscale
 	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
-	  scripts/ssm-run.sh jarvis-status "$$(cat $(INSTANCE_ID_FILE))"
+	  scripts/ssm-run.sh jarvis-status "$$(cat $(INSTANCE_ID_FILE))" $(SSM_DEFAULT_TIMEOUT_S)
 
 restart: $(INSTANCE_ID_FILE) ## make restart MODE=work|personal [ROTATE=true]
 	@test -n "$(MODE)" || { echo "usage: make restart MODE=work|personal"; exit 1; }
 	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
-	  scripts/ssm-run.sh jarvis-restart "$$(cat $(INSTANCE_ID_FILE))" --parameters Mode=$(MODE),Rotate=$(ROTATE)
+	  scripts/ssm-run.sh jarvis-restart "$$(cat $(INSTANCE_ID_FILE))" $(SSM_DEFAULT_TIMEOUT_S) --parameters Mode=$(MODE),Rotate=$(ROTATE)
 
 secrets-sync: $(INSTANCE_ID_FILE) ## re-sync Secrets Manager values into the per-mode env files
 	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
-	  scripts/ssm-run.sh jarvis-secrets-sync "$$(cat $(INSTANCE_ID_FILE))"
+	  scripts/ssm-run.sh jarvis-secrets-sync "$$(cat $(INSTANCE_ID_FILE))" $(SSM_DEFAULT_TIMEOUT_S)
 
 sync-agents: $(INSTANCE_ID_FILE) ## make sync-agents MODE=work|personal; diffs, confirms, applies (interactive SSM session, nothing stored)
 	@test -n "$(MODE)" || { echo "usage: make sync-agents MODE=work|personal"; exit 1; }

@@ -13,6 +13,10 @@ install_units() {
   find "$script_dir/bin" -maxdepth 1 -type f -print0 \
     | xargs -0 --no-run-if-empty install -m 0700 -o root -g root -t /opt/jarvis/bin/
   install -m 0700 -o root -g root "$script_dir/post-boot-assert.sh" /opt/jarvis/bin/post-boot-assert
+  # M1: without this, a rebuilt/replacement instance has no /opt/jarvis/bin/jarvis-deploy at all
+  # (the SSM document only carries this script's body to instances reached via `make deploy`), so
+  # run_first_deploy always skips and both daemons stay down until someone deploys by hand.
+  install -m 0700 -o root -g root "$script_dir/ssm/jarvis-deploy.sh" /opt/jarvis/bin/jarvis-deploy
   find "$script_dir/libexec" -maxdepth 1 -type f -print0 \
     | xargs -0 --no-run-if-empty install -m 0755 -o root -g root -t /opt/jarvis/libexec/
 

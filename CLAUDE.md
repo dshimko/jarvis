@@ -158,3 +158,14 @@ make plan                              # terraform plan -out plan.out for envs/p
   in the same `destroy`.
 - Terraform policy tests with a fixed expected region do not prove region derivation; add a
   non-default-region run.
+- The release tarball is also the test root on the box. Any test that reads a repo file
+  outside `ARCHIVE_PATHS` in `scripts/release.sh` breaks every deploy; `tests/test_release_tree.py`
+  runs pytest collection against the git-archive tree to catch this.
+- `aws ssm wait command-executed` is capped at 100 s (20 x 5 s) with no CLI override; poll
+  `get-command-invocation` for anything long-running.
+- `ops/aws/ssm/*.sh` reach the box only as SSM document bodies. Anything bootstrap must run
+  locally from `ssm/` has to be installed explicitly by `install-units.sh`.
+- python-dotenv is not a raw `KEY=value` reader: unquoted values lose ` #...`, and `${VAR}` is
+  expanded regardless of quoting (no escape syntax). `jarvis-secrets` writes single-quoted values
+  and rejects a value containing `'` or `${`; the reader-side fix (`interpolate=False`) is in
+  `TODO.md`.

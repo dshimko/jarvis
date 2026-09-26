@@ -38,6 +38,18 @@ def test_jarvis_at_service_execstartpost_never_fails_the_daemon():
     assert "ExecStartPost=-+/opt/jarvis/bin/jarvis-secrets publish-token %i" in text
 
 
+# M1 (PR integration review): without this, a rebuilt/replacement instance has no
+# /opt/jarvis/bin/jarvis-deploy, so run_first_deploy always skips and both daemons stay down
+# until someone runs `make deploy` by hand.
+def test_install_units_installs_ssm_jarvis_deploy_as_bin_jarvis_deploy():
+    text = (OPS_AWS / "lib" / "install-units.sh").read_text()
+    assert re.search(
+        r'install\s+-m\s*0700\s+-o\s+root\s+-g\s+root\s+"\$script_dir/ssm/jarvis-deploy\.sh"'
+        r'\s+/opt/jarvis/bin/jarvis-deploy\b',
+        text,
+    ), "install-units.sh must install ssm/jarvis-deploy.sh as /opt/jarvis/bin/jarvis-deploy (root, 0700)"
+
+
 # H1: %h resolves to root's home in a system unit even with User=%i; only /home/%i is correct.
 def test_syncthing_override_uses_home_percent_i_not_percent_h():
     text = (OPS_AWS / "systemd" / "syncthing-override.conf").read_text()

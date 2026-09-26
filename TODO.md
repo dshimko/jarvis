@@ -3,6 +3,28 @@
 Findings left unfixed after a review gate (MEDIUM and below), with a file reference and a
 one-line fix direction. Remove an entry when it is done.
 
+## From the PR integration review (2026-09-26)
+
+- [ ] LOW `scripts/ssm-run.sh`: also stop polling on the other terminal SSM statuses
+  (Undeliverable, Terminated, AccessDenied, InvalidPlatform); today they poll until the timeout
+  and still exit 1 (fails closed). Direction: extend the terminal-state list.
+- [ ] LOW `scripts/ssm-run.sh`: a persistently failing `get-command-invocation` (stale cached
+  instance id) is mapped to Pending and polls until the timeout. Direction: count consecutive
+  API errors and fail after a few; ties into the `.make/instance_id` entry below.
+- [ ] LOW `scripts/oauth-login.sh`: `OAUTH_PORTS=","` yields an empty `ports` array that trips
+  `set -u` on bash 3.2. Direction: validate the override and use the empty-array idiom.
+- [ ] LOW `jarvis/modes.py` `_load_env` and `jarvis/secrets_check.py` `_read_env`: read env
+  files with `dotenv_values(path, interpolate=False)` so a value containing `${...}` survives;
+  then drop the `${` rejection in `ops/aws/bin/jarvis-secrets` `validate_keys`. Direction: change
+  both readers together with a round-trip test.
+- [ ] LOW `jarvis/api.py` local profile: both WSL daemons share `~/.jarvis/api_token`; the loser
+  of the `O_EXCL` race at a simultaneous first start can read an empty file and exit (Restart
+  recovers after 5 s). Not reachable on AWS. Direction: brief retry-read when the file is fresh.
+- [ ] VERIFY on first boot: the `claude` native binary under `ProcSubset=pid`,
+  `ProtectProc=invisible`, and an empty `CapabilityBoundingSet` (no `/proc/meminfo`, `/proc/stat`,
+  `/proc/cpuinfo`). Acceptance: `make status` plus one voice utterance per mode after the first
+  deploy. If it fails, relax `ProcSubset` first.
+
 ## From the re-targeting gate (us-east-1, OU, local state; 2026-09-25)
 
 - [ ] MEDIUM `infra/org/README.md` and `infra/RUNBOOK-ops.md` section 10: a closed account stays

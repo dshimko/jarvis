@@ -73,6 +73,53 @@ def test_validate_keys_rejects_crlf_bad_format_and_non_string():
     assert bad == ["HAS_CR", "HAS_LF", "NOT_STRING", "bad_lower"]
 
 
+# L1 (PR integration review): the app reads the written env file with python-dotenv, which
+# strips ` #...` as a trailing comment on an unquoted value. Single-quoting each value defeats
+# that. It does NOT, however, defeat `${VAR}` interpolation -- confirmed against the installed
+# python-dotenv's own source: its `${NAME}` regex applies regardless of quote style whenever a
+# caller reads with the default `interpolate=True`, with no escape syntax at all. A value shaped
+# like that can only be corrupted on read-back, never written safely, so it is rejected outright
+# instead (same as a value containing a single quote).
+def test_validate_keys_rejects_a_value_containing_a_single_quote():
+    mod = load_module("jarvis_secrets_quote", JARVIS_SECRETS_PATH)
+    bad = mod.validate_keys({"HAS_QUOTE": "it's got one", "CLEAN": "ok"})
+    assert bad == ["HAS_QUOTE"]
+
+
+def test_validate_keys_rejects_a_value_shaped_like_dotenv_interpolation():
+    mod = load_module("jarvis_secrets_interp", JARVIS_SECRETS_PATH)
+    bad = mod.validate_keys({"HAS_INTERP": "prefix-${HOME}-suffix", "CLEAN": "ok"})
+    assert bad == ["HAS_INTERP"]
+
+
+def test_env_body_hash_comment_value_survives_a_python_dotenv_round_trip(tmp_path):
+    from dotenv import dotenv_values
+
+    mod = load_module("jarvis_secrets_envbody", JARVIS_SECRETS_PATH)
+    values = {"TRICKY_HASH": "abc #def"}
+
+    assert mod.validate_keys(values) == []  # no CR/LF, no quote, no "${"
+
+    body = mod.format_env_body(values)
+    env_file = tmp_path / "env"
+    env_file.write_text(body)
+
+    parsed = dotenv_values(str(env_file))
+    assert parsed["TRICKY_HASH"] == "abc #def"
+
+
+def test_dotenv_interpolates_regardless_of_quoting_documenting_why_it_is_rejected(tmp_path):
+    """Not a test of our code -- pins the exact installed python-dotenv behavior that
+    validate_keys()'s "${" rejection depends on, so an upgrade that changes it is caught here
+    rather than silently corrupting a secret on a real instance."""
+    from dotenv import dotenv_values
+
+    env_file = tmp_path / "env"
+    env_file.write_text("KEY='${HOME}'\n")
+    parsed = dotenv_values(str(env_file))
+    assert parsed["KEY"] != "${HOME}"  # i.e. it WAS interpolated despite the single quotes
+
+
 def test_inline_mcp_literal_violations_matches_real_app_function(tmp_path):
     from jarvis.secrets_check import mcp_literal_violations as real_mcp_literal_violations
 
