@@ -36,7 +36,7 @@ locals {
       resources  = ["*"]
       principals = []
       conditions = [
-        { op = "StringEquals", key = "aws:RequestedRegion", values = ["us-east-2"] },
+        { op = "StringEquals", key = "aws:RequestedRegion", values = [var.region] },
       ]
     }
     # W3
@@ -56,9 +56,9 @@ locals {
       action_key = "Action"
       actions    = ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:DescribeKey"]
       resources  = ["*"]
-      principals = ["Service:logs.us-east-2.amazonaws.com"]
+      principals = ["Service:logs.${var.region}.amazonaws.com"]
       conditions = [
-        { op = "ArnLike", key = "kms:EncryptionContext:aws:logs:arn", values = ["arn:aws:logs:us-east-2:111122223333:log-group:/jarvis/*"] },
+        { op = "ArnLike", key = "kms:EncryptionContext:aws:logs:arn", values = ["arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/*"] },
       ]
     }
     # W5
@@ -71,7 +71,7 @@ locals {
       principals = ["Service:delivery.logs.amazonaws.com"]
       conditions = [
         { op = "StringEquals", key = "aws:SourceAccount", values = ["111122223333"] },
-        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:logs:us-east-2:111122223333:*"] },
+        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:logs:${var.region}:111122223333:*"] },
       ]
     }
     # W6
@@ -95,7 +95,7 @@ locals {
       resources  = ["*"]
       principals = ["AWS:arn:aws:iam::111122223333:role/jarvis-backup"]
       conditions = [
-        { op = "StringEquals", key = "kms:ViaService", values = ["ec2.us-east-2.amazonaws.com", "backup.us-east-2.amazonaws.com"] },
+        { op = "StringEquals", key = "kms:ViaService", values = ["ec2.${var.region}.amazonaws.com", "backup.${var.region}.amazonaws.com"] },
       ]
     }
     # W8
@@ -216,7 +216,7 @@ locals {
       resources  = ["*"]
       principals = []
       conditions = [
-        { op = "StringNotEquals", key = "aws:RequestedRegion", values = ["us-east-2"] },
+        { op = "StringNotEquals", key = "aws:RequestedRegion", values = [var.region] },
       ]
     }
     # W11

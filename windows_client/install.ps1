@@ -33,13 +33,19 @@
     The IAM Identity Center profile name (the JarvisClient permission set, PLAN.md AD25) used for
     `aws secretsmanager get-secret-value` and written into client.yaml as aws_profile. Only used
     under -ClientProfile aws.
+
+.PARAMETER AwsRegion
+    The region passed as `--region` on every `aws secretsmanager get-secret-value` call and
+    written into client.yaml as aws_region (PLAN.md AD34: region literals leave every script,
+    including this one). Only used under -ClientProfile aws.
 #>
 param(
     [ValidateSet('aws', 'wsl')]
     [string]$ClientProfile = 'aws',
     [string]$SyncthingWorkDeviceId = '',
     [string]$SyncthingPersonalDeviceId = '',
-    [string]$AwsProfile = 'jarvis-client'
+    [string]$AwsProfile = 'jarvis-client',
+    [string]$AwsRegion = 'us-east-1'
 )
 $ErrorActionPreference = 'Stop'
 $env:WSL_UTF8 = '1'   # wsl.exe otherwise emits UTF-16 for some subcommands
@@ -455,7 +461,7 @@ function Format-YamlScalar {
 }
 
 function Write-ClientConfig {
-    param($Whisper, $Piper, [string]$ClientProfile, [string]$AwsProfile)
+    param($Whisper, $Piper, [string]$ClientProfile, [string]$AwsProfile, [string]$AwsRegion)
 
     $configPath = Join-Path $JarvisDir 'client.yaml'
     if (Test-Path $configPath) {
@@ -470,6 +476,7 @@ function Write-ClientConfig {
             'api_url_personal: http://jarvis:8782'
             'token_source: secretsmanager'
             "aws_profile: $(Format-YamlScalar $AwsProfile)"
+            "aws_region: $AwsRegion"
             'token_secret_work: jarvis/work/api-token'
             'token_secret_personal: jarvis/personal/api-token'
         )
@@ -632,7 +639,7 @@ Write-Host "`n== Step 3: JarvisTray.exe =="
 Install-TrayExe
 
 Write-Host "`n== Step 4: client.yaml =="
-Write-ClientConfig -Whisper $whisper -Piper $piper -ClientProfile $ClientProfile -AwsProfile $AwsProfile
+Write-ClientConfig -Whisper $whisper -Piper $piper -ClientProfile $ClientProfile -AwsProfile $AwsProfile -AwsRegion $AwsRegion
 
 Write-Host "`n== Step 5: logon Scheduled Task =="
 Install-StartupTask -ClientProfile $ClientProfile

@@ -1,5 +1,0 @@
-# Copy to backend.hcl (gitignored). The bucket is a state bucket in the MANAGEMENT account
-# (080109295043), created by the human; org/ does not create it.
-bucket = "MANAGEMENT_STATE_BUCKET"
-key    = "jarvis/org/terraform.tfstate"
-region = "us-east-1"

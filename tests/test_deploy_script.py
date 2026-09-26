@@ -189,7 +189,7 @@ def deploy_env(tmp_path):
         "JARVIS_CW_CONFIG_DIR": str(tmp_path / "cw"),
         "JARVIS_LOGROTATE_DIR": str(tmp_path / "logrotate"),
         "JARVIS_ARTIFACTS_BUCKET": "test-bucket",
-        "JARVIS_REGION": "us-east-2",
+        "JARVIS_REGION": "us-east-1",
         "JARVIS_HEALTH_TIMEOUT_S": "2",
         "JARVIS_HEALTH_INTERVAL_S": "0.2",
         # H1: a fixed real path (e.g. /run/jarvis-deploy.lock) would collide with a real deploy
@@ -378,6 +378,21 @@ def test_prune_keeps_exactly_the_configured_number_of_releases(deploy_env):
     assert remaining == {SHA_D, SHA_E}, remaining
 
 
+def test_refuses_to_run_when_region_is_not_set(deploy_env, tmp_path):
+    """AD34: region literals leave every script. With no JARVIS_REGION env var and no region
+    file to fall back to, jarvis-deploy.sh must fail loudly instead of defaulting to a
+    hardcoded region, and must exit before touching JARVIS_ROOT."""
+    env = dict(deploy_env["env"])
+    env.pop("JARVIS_REGION", None)
+    env["JARVIS_REGION_FILE"] = str(tmp_path / "no-such-region-file")
+
+    result = _run_deploy(SHA_A, env)
+
+    assert result.returncode != 0
+    assert "AWS region not set" in (result.stdout + result.stderr)
+    assert not (deploy_env["root"] / "current").exists()
+
+
 def test_requirements_lock_exists_and_every_pinned_entry_is_hashed():
     """M4: requirements-lock.txt (uv pip compile --generate-hashes) ships in the release tarball
     and jarvis-deploy.sh installs from it with --require-hashes; every pinned requirement line
@@ -434,7 +449,7 @@ def sync_agents_env(tmp_path):
     _write_shim(shim_dir, "session-manager-plugin", "exit 0\n")
     _write_ssm_transcript_shim(shim_dir, transcript_file)
 
-    env = {**os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-2"}
+    env = {**os.environ, "PATH": f"{shim_dir}:{os.environ['PATH']}", "AWS_REGION": "us-east-1"}
     return {"env": env, "transcript_file": transcript_file}
 
 

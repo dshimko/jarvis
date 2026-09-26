@@ -15,6 +15,9 @@ windows_client/dist/
 .terraform/
 *.tfstate
 *.tfstate.*
+# org/ local state (AD36): the only record of the OU and account; the human backs it up.
+infra/org/terraform.tfstate
+infra/org/terraform.tfstate.backup
 plan.out
 plan.txt
 infra/**/.build/

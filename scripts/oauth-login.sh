@@ -23,7 +23,7 @@
 set -euo pipefail
 
 MODE="${1:-}"
-AWS_REGION="${AWS_REGION:-us-east-2}"
+REGION="${AWS_REGION:-us-east-1}"
 OAUTH_PORTS="${OAUTH_PORTS:-3118,8766}"
 INSTANCE_ID_FILE="${JARVIS_INSTANCE_ID_FILE:-.make/instance_id}"
 
@@ -42,7 +42,7 @@ require_tools() {
   command -v aws >/dev/null 2>&1 || fail "aws CLI not found"
   command -v session-manager-plugin >/dev/null 2>&1 \
     || fail "session-manager-plugin not found (brew install --cask session-manager-plugin)"
-  aws sts get-caller-identity --region "$AWS_REGION" "${AWS_PROFILE_OPT[@]}" >/dev/null 2>&1 \
+  aws sts get-caller-identity --region "$REGION" "${AWS_PROFILE_OPT[@]}" >/dev/null 2>&1 \
     || fail "no active AWS SSO session (aws sso login) for AWS_PROFILE=${AWS_PROFILE:-<unset>}"
 }
 
@@ -72,7 +72,7 @@ start_port_forwards() {
     python3 -c 'import json, sys; print(json.dumps({"portNumber": [sys.argv[1]], "localPortNumber": [sys.argv[1]]}))' \
       "$port" >"$params_file"
     log_file="$(mktemp)"
-    aws ssm start-session --target "$id" --region "$AWS_REGION" "${AWS_PROFILE_OPT[@]}" \
+    aws ssm start-session --target "$id" --region "$REGION" "${AWS_PROFILE_OPT[@]}" \
       --document-name AWS-StartPortForwardingSession --parameters "file://$params_file" \
       >"$log_file" 2>&1 &
     PORT_FORWARD_PIDS+=("$!")
@@ -117,7 +117,7 @@ open_vault_shell() {
   # invoking bash explicitly (just setting HOME), never the account's own configured shell.
   local id="$1" params_file
   params_file="$(ssm_params_file command "sudo -u jarvis-$MODE -H bash -lc 'cd ~/vault && exec bash'")"
-  aws ssm start-session --target "$id" --region "$AWS_REGION" "${AWS_PROFILE_OPT[@]}" \
+  aws ssm start-session --target "$id" --region "$REGION" "${AWS_PROFILE_OPT[@]}" \
     --document-name AWS-StartInteractiveCommand --parameters "file://$params_file"
   rm -f -- "$params_file"
 }
@@ -142,7 +142,7 @@ verify_connection() {
   params_file="$(ssm_params_file command "$remote_cmd")"
 
   log "verifying: which Gmail account is $MODE connected to?"
-  if raw="$(aws ssm start-session --region "$AWS_REGION" "${AWS_PROFILE_OPT[@]}" --target "$id" \
+  if raw="$(aws ssm start-session --region "$REGION" "${AWS_PROFILE_OPT[@]}" --target "$id" \
        --document-name AWS-StartInteractiveCommand --parameters "file://$params_file" 2>&1)"; then
     rc=0
   else

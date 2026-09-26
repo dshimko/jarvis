@@ -26,6 +26,7 @@ def test_first_load_writes_client_yaml_with_defaults(tmp_path):
     assert cfg.api_url_personal == "http://localhost:8782"
     assert cfg.token_source == "file"
     assert cfg.aws_profile == ""
+    assert cfg.aws_region == "us-east-1"
     assert cfg.token_secret_work == "jarvis/work/api-token"
     assert cfg.token_secret_personal == "jarvis/personal/api-token"
 

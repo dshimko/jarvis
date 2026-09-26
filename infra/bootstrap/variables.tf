@@ -11,7 +11,7 @@ variable "expected_account_id" {
 variable "aws_region" {
   description = "Home region (AD20)."
   type        = string
-  default     = "us-east-2"
+  default     = "us-east-1"
 }
 
 variable "noncurrent_version_expiration_days" {

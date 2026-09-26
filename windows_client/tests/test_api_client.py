@@ -235,7 +235,7 @@ def test_secrets_manager_token_calls_the_aws_cli_with_expected_args(tmp_path):
     assert calls == [[
         "aws", "secretsmanager", "get-secret-value",
         "--profile", "jarvis-client-sso", "--secret-id", "jarvis/work/api-token",
-        "--query", "SecretString", "--output", "text", "--region", "us-east-2",
+        "--query", "SecretString", "--output", "text", "--region", "us-east-1",
     ]]
 
 

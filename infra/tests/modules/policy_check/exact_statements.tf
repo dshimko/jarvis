@@ -35,10 +35,10 @@ locals {
       action_key = "Action"
       actions    = ["secretsmanager:GetSecretValue"]
       resources = [
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work-AAAAAA",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal-BBBBBB",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/shared-CCCCCC",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/tailscale-DDDDDD",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work-AAAAAA",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal-BBBBBB",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/shared-CCCCCC",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/tailscale-DDDDDD",
       ]
       principals = []
       conditions = []
@@ -49,15 +49,15 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["kms:Decrypt"]
-      resources  = ["arn:aws:kms:us-east-2:111122223333:key/11111111-1111-4111-8111-111111111111"]
+      resources  = ["arn:aws:kms:${var.region}:111122223333:key/11111111-1111-4111-8111-111111111111"]
       principals = []
       conditions = [
-        { op = "StringEquals", key = "kms:ViaService", values = ["secretsmanager.us-east-2.amazonaws.com"] },
+        { op = "StringEquals", key = "kms:ViaService", values = ["secretsmanager.${var.region}.amazonaws.com"] },
         { op = "StringEquals", key = "kms:EncryptionContext:SecretARN", values = [
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work-AAAAAA",
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal-BBBBBB",
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/shared-CCCCCC",
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/tailscale-DDDDDD",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work-AAAAAA",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal-BBBBBB",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/shared-CCCCCC",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/tailscale-DDDDDD",
         ] },
       ]
     }
@@ -68,8 +68,8 @@ locals {
       action_key = "Action"
       actions    = ["secretsmanager:PutSecretValue"]
       resources = [
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work/api-token-EEEEEE",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal/api-token-FFFFFF",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work/api-token-EEEEEE",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal/api-token-FFFFFF",
       ]
       principals = []
       conditions = []
@@ -80,13 +80,13 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["kms:GenerateDataKey", "kms:Decrypt"]
-      resources  = ["arn:aws:kms:us-east-2:111122223333:key/11111111-1111-4111-8111-111111111111"]
+      resources  = ["arn:aws:kms:${var.region}:111122223333:key/11111111-1111-4111-8111-111111111111"]
       principals = []
       conditions = [
-        { op = "StringEquals", key = "kms:ViaService", values = ["secretsmanager.us-east-2.amazonaws.com"] },
+        { op = "StringEquals", key = "kms:ViaService", values = ["secretsmanager.${var.region}.amazonaws.com"] },
         { op = "StringEquals", key = "kms:EncryptionContext:SecretARN", values = [
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work/api-token-EEEEEE",
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal/api-token-FFFFFF",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work/api-token-EEEEEE",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal/api-token-FFFFFF",
         ] },
       ]
     }
@@ -108,10 +108,10 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["kms:Decrypt"]
-      resources  = ["arn:aws:kms:us-east-2:111122223333:key/11111111-1111-4111-8111-111111111111"]
+      resources  = ["arn:aws:kms:${var.region}:111122223333:key/11111111-1111-4111-8111-111111111111"]
       principals = []
       conditions = [
-        { op = "StringEquals", key = "kms:ViaService", values = ["s3.us-east-2.amazonaws.com"] },
+        { op = "StringEquals", key = "kms:ViaService", values = ["s3.${var.region}.amazonaws.com"] },
         { op = "StringLike", key = "kms:EncryptionContext:aws:s3:arn", values = [
           "arn:aws:s3:::jarvis-artifacts-111122223333",
           "arn:aws:s3:::jarvis-artifacts-111122223333/*",
@@ -128,7 +128,7 @@ locals {
       principals = ["Service:delivery.logs.amazonaws.com"]
       conditions = [
         { op = "StringEquals", key = "aws:SourceAccount", values = ["111122223333"] },
-        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:logs:us-east-2:111122223333:*"] },
+        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:logs:${var.region}:111122223333:*"] },
       ]
     }
     # X10
@@ -148,9 +148,9 @@ locals {
       action_key = "Action"
       actions    = ["ssm:StartSession"]
       resources = [
-        "arn:aws:ssm:us-east-2::document/AWS-StartPortForwardingSession",
-        "arn:aws:ssm:us-east-2::document/AWS-StartInteractiveCommand",
-        "arn:aws:ssm:us-east-2:111122223333:document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:${var.region}::document/AWS-StartPortForwardingSession",
+        "arn:aws:ssm:${var.region}::document/AWS-StartInteractiveCommand",
+        "arn:aws:ssm:${var.region}:111122223333:document/SSM-SessionManagerRunShell",
       ]
       principals = []
       conditions = []
@@ -162,10 +162,10 @@ locals {
       action_key = "Action"
       actions    = ["ssm:SendCommand"]
       resources = [
-        "arn:aws:ssm:us-east-2:111122223333:document/jarvis-deploy",
-        "arn:aws:ssm:us-east-2:111122223333:document/jarvis-restart",
-        "arn:aws:ssm:us-east-2:111122223333:document/jarvis-secrets-sync",
-        "arn:aws:ssm:us-east-2:111122223333:document/jarvis-status",
+        "arn:aws:ssm:${var.region}:111122223333:document/jarvis-deploy",
+        "arn:aws:ssm:${var.region}:111122223333:document/jarvis-restart",
+        "arn:aws:ssm:${var.region}:111122223333:document/jarvis-secrets-sync",
+        "arn:aws:ssm:${var.region}:111122223333:document/jarvis-status",
       ]
       principals = []
       conditions = []
@@ -195,7 +195,7 @@ locals {
         "sns:Publish",
         "sns:DeleteTopic",
       ]
-      resources  = ["arn:aws:sns:us-east-2:111122223333:jarvis-alerts"]
+      resources  = ["arn:aws:sns:${var.region}:111122223333:jarvis-alerts"]
       principals = ["AWS:arn:aws:iam::111122223333:root"]
       conditions = []
     }
@@ -205,11 +205,11 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["sns:Publish"]
-      resources  = ["arn:aws:sns:us-east-2:111122223333:jarvis-alerts"]
+      resources  = ["arn:aws:sns:${var.region}:111122223333:jarvis-alerts"]
       principals = ["Service:cloudwatch.amazonaws.com"]
       conditions = [
         { op = "StringEquals", key = "aws:SourceAccount", values = ["111122223333"] },
-        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:cloudwatch:us-east-2:111122223333:alarm:jarvis-*"] },
+        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:cloudwatch:${var.region}:111122223333:alarm:jarvis-*"] },
       ]
     }
     # X16
@@ -218,7 +218,7 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["sns:Publish"]
-      resources  = ["arn:aws:sns:us-east-2:111122223333:jarvis-alerts"]
+      resources  = ["arn:aws:sns:${var.region}:111122223333:jarvis-alerts"]
       principals = ["Service:budgets.amazonaws.com"]
       conditions = [
         { op = "StringEquals", key = "aws:SourceAccount", values = ["111122223333"] },
@@ -231,7 +231,7 @@ locals {
       effect     = "Deny"
       action_key = "Action"
       actions    = ["sns:Publish"]
-      resources  = ["arn:aws:sns:us-east-2:111122223333:jarvis-alerts"]
+      resources  = ["arn:aws:sns:${var.region}:111122223333:jarvis-alerts"]
       principals = ["*"]
       conditions = [
         { op = "Bool", key = "aws:SecureTransport", values = ["false"] },

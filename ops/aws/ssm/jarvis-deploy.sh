@@ -38,7 +38,14 @@ if [ -z "${JARVIS_ARTIFACTS_BUCKET:-}" ] && [ -f "$INSTANCE_ENV_FILE" ]; then
   eval "$(grep -E '^JARVIS_(ARTIFACTS_BUCKET|REGION)=' "$INSTANCE_ENV_FILE")"
 fi
 ARTIFACTS_BUCKET="${JARVIS_ARTIFACTS_BUCKET:?JARVIS_ARTIFACTS_BUCKET must be set (env or /etc/jarvis/instance.env)}"
-AWS_REGION="${JARVIS_REGION:-us-east-2}"
+# AD34: region literals leave every script. JARVIS_REGION (env) wins; otherwise fall back to the
+# file user_data.sh.tftpl writes before bootstrap.sh runs (JARVIS_REGION_FILE override for tests).
+# Fails loudly if both are empty.
+REGION_FILE="${JARVIS_REGION_FILE:-/etc/jarvis/region}"
+# `|| true`: under `set -e`, a failing `cat` (missing file) inside this command substitution
+# would otherwise abort the script right here, before the explicit `:?` check below ever runs.
+AWS_REGION="${JARVIS_REGION:-$(cat "$REGION_FILE" 2>/dev/null || true)}"
+: "${AWS_REGION:?AWS region not set: export JARVIS_REGION or ensure $REGION_FILE exists}"
 
 RELEASES_DIR="$JARVIS_ROOT/releases"
 CURRENT_LINK="$JARVIS_ROOT/current"

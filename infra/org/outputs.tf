@@ -3,13 +3,18 @@ output "account_id" {
   value       = aws_organizations_account.jarvis_prod.id
 }
 
+output "ou_id" {
+  description = "Id of the jarvis OU that holds jarvis-prod and carries the SCPs (AD35)."
+  value       = aws_organizations_organizational_unit.jarvis.id
+}
+
 output "scp_ids" {
   description = "SCP ids by name."
   value       = { for k, p in aws_organizations_policy.scp : k => p.id }
 }
 
 output "attached_scps" {
-  description = "SCPs attached to jarvis-prod."
+  description = "SCPs attached to the jarvis OU."
   value       = sort(keys(aws_organizations_policy_attachment.scp))
 }
 

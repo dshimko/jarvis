@@ -11,10 +11,10 @@
 mock_provider "aws" {
   # ARN-shaped defaults: the provider validates ARNs even under a mock.
   mock_resource "aws_kms_key" {
-    defaults = { arn = "arn:aws:kms:us-east-2:111122223333:key/00000000-0000-4000-8000-000000000000" }
+    defaults = { arn = "arn:aws:kms:us-east-1:111122223333:key/00000000-0000-4000-8000-000000000000" }
   }
   mock_resource "aws_sns_topic" {
-    defaults = { arn = "arn:aws:sns:us-east-2:111122223333:jarvis-alerts" }
+    defaults = { arn = "arn:aws:sns:us-east-1:111122223333:jarvis-alerts" }
   }
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::111122223333:role/mock" }
@@ -26,19 +26,19 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:s3:::mock-bucket" }
   }
   mock_resource "aws_secretsmanager_secret" {
-    defaults = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/mock-AbCdEf" }
+    defaults = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/mock-AbCdEf" }
   }
   mock_resource "aws_ssoadmin_permission_set" {
     defaults = { arn = "arn:aws:sso:::permissionSet/ssoins-test/ps-0000000000000000" }
   }
   mock_resource "aws_backup_vault" {
-    defaults = { arn = "arn:aws:backup:us-east-2:111122223333:backup-vault:jarvis-backup" }
+    defaults = { arn = "arn:aws:backup:us-east-1:111122223333:backup-vault:jarvis-backup" }
   }
   mock_resource "aws_launch_template" {
     defaults = { id = "lt-0123456789abcdef0", latest_version = 1 }
   }
   mock_resource "aws_cloudwatch_log_group" {
-    defaults = { arn = "arn:aws:logs:us-east-2:111122223333:log-group:/jarvis/mock" }
+    defaults = { arn = "arn:aws:logs:us-east-1:111122223333:log-group:/jarvis/mock" }
   }
 
   override_data {

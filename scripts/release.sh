@@ -5,7 +5,8 @@
 # releases/DEPLOYED marker on success, which ops/aws/lib/first-deploy.sh reads at boot).
 # `make release` wraps this. infra/PLAN.md deploy-engineer deliverable 1; infra/DESIGN.md 8.1.
 #
-# Region-deny SCP consequence (PLAN.md 3.2): every aws call passes --region us-east-2 explicitly.
+# Region-deny SCP consequence (PLAN.md 3.2): every aws call passes --region $REGION explicitly
+# (REGION defaults to us-east-1; AD34).
 # Bucket key-pinning Deny (PLAN.md 3.2): the artifacts bucket's DenyWrongKmsKey policy rejects an
 # upload naming the wrong SSE-KMS key AND one naming none-with-a-null-key-id, so the only
 # compliant upload is one with NO server-side-encryption header at all; `aws s3 cp` below never
@@ -20,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
-AWS_REGION="${AWS_REGION:-us-east-2}"
+REGION="${AWS_REGION:-us-east-1}"
 ARTIFACTS_BUCKET="${ARTIFACTS_BUCKET:-}"
 BUILD_DIR="${JARVIS_RELEASE_BUILD_DIR:-$(mktemp -d)}"
 # M4: requirements-lock.txt (uv pip compile --generate-hashes, includes requirements.txt via
@@ -51,7 +52,7 @@ resolve_bucket() {
     return 0
   fi
   local account_id
-  account_id="$(aws sts get-caller-identity --query Account --output text --region "$AWS_REGION" 2>/dev/null)" \
+  account_id="$(aws sts get-caller-identity --query Account --output text --region "$REGION" 2>/dev/null)" \
     || fail "set ARTIFACTS_BUCKET, or ensure 'aws sts get-caller-identity' works (need a valid AWS_PROFILE)"
   printf 'jarvis-artifacts-%s' "$account_id"
 }
@@ -126,10 +127,10 @@ main() {
   (cd "$BUILD_DIR" && shasum -a 256 "$tgz" >"$sha_file")
 
   bucket="$(resolve_bucket)"
-  log "uploading to s3://$bucket/releases/$sha/ (region $AWS_REGION)"
-  aws s3 cp "$BUILD_DIR/$tgz" "s3://$bucket/releases/$sha/$tgz" --region "$AWS_REGION" --only-show-errors
-  aws s3 cp "$BUILD_DIR/$sha_file" "s3://$bucket/releases/$sha/$sha_file" --region "$AWS_REGION" --only-show-errors
-  printf '%s' "$sha" | aws s3 cp - "s3://$bucket/releases/latest" --region "$AWS_REGION" --only-show-errors
+  log "uploading to s3://$bucket/releases/$sha/ (region $REGION)"
+  aws s3 cp "$BUILD_DIR/$tgz" "s3://$bucket/releases/$sha/$tgz" --region "$REGION" --only-show-errors
+  aws s3 cp "$BUILD_DIR/$sha_file" "s3://$bucket/releases/$sha/$sha_file" --region "$REGION" --only-show-errors
+  printf '%s' "$sha" | aws s3 cp - "s3://$bucket/releases/latest" --region "$REGION" --only-show-errors
 
   log "released $sha ($tgz, $sha_file) -> s3://$bucket/releases/$sha/"
   printf '%s\n' "$sha"

@@ -18,7 +18,7 @@ set -euo pipefail
 
 MODE="${1:-}"
 INSTANCE_ID="${2:-}"
-AWS_REGION="${AWS_REGION:-us-east-2}"
+REGION="${AWS_REGION:-us-east-1}"
 
 # stderr, not stdout: run_remote() is called as `diff="$(run_remote ...)"`, so anything log()/
 # fail() print to stdout would be silently swallowed into $diff (and, on failure, never seen at
@@ -65,7 +65,7 @@ run_remote() {
   params_file="$(mktemp)"
   python3 -c 'import json, sys; print(json.dumps({"command": [sys.argv[1]]}))' "$remote_cmd" >"$params_file"
 
-  if raw="$(aws ssm start-session --region "$AWS_REGION" --target "$INSTANCE_ID" \
+  if raw="$(aws ssm start-session --region "$REGION" --target "$INSTANCE_ID" \
        --document-name AWS-StartInteractiveCommand --parameters "file://$params_file" 2>&1)"; then
     rc=0
   else

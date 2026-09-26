@@ -7,7 +7,7 @@ variable "identity_center_region" {
 variable "home_region" {
   description = "The only region the region-deny SCP allows, and the region in permission-set ARNs."
   type        = string
-  default     = "us-east-2"
+  default     = "us-east-1"
 }
 
 variable "account_name" {
@@ -27,7 +27,7 @@ variable "account_email" {
 }
 
 variable "parent_id" {
-  description = "OU or root id for the account. null places it under the organization root."
+  description = "Parent (root or OU id) of the jarvis OU. null places the OU under the organization root."
   type        = string
   default     = null
 }

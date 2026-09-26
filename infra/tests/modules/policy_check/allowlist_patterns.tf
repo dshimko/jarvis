@@ -28,9 +28,9 @@ locals {
       action_key = "Action"
       actions    = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
       resources = [
-        "arn:aws:logs:us-east-2:111122223333:log-group:/jarvis/work:*",
-        "arn:aws:logs:us-east-2:111122223333:log-group:/jarvis/personal:*",
-        "arn:aws:logs:us-east-2:111122223333:log-group:/jarvis/cloud-init:*",
+        "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/work:*",
+        "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/personal:*",
+        "arn:aws:logs:${var.region}:111122223333:log-group:/jarvis/cloud-init:*",
       ]
       principals = []
       conditions = []
@@ -42,8 +42,8 @@ locals {
       action_key = "Action"
       actions    = ["secretsmanager:GetSecretValue"]
       resources = [
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work/api-token-??????",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal/api-token-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work/api-token-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal/api-token-??????",
       ]
       principals = []
       conditions = []
@@ -54,14 +54,14 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["kms:Decrypt"]
-      resources  = ["arn:aws:kms:us-east-2:111122223333:key/*"]
+      resources  = ["arn:aws:kms:${var.region}:111122223333:key/*"]
       principals = []
       conditions = [
         { op = "ForAnyValue:StringEquals", key = "kms:ResourceAliases", values = ["alias/jarvis"] },
-        { op = "StringEquals", key = "kms:ViaService", values = ["secretsmanager.us-east-2.amazonaws.com"] },
+        { op = "StringEquals", key = "kms:ViaService", values = ["secretsmanager.${var.region}.amazonaws.com"] },
         { op = "StringLike", key = "kms:EncryptionContext:SecretARN", values = [
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work/api-token-??????",
-          "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal/api-token-??????",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work/api-token-??????",
+          "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal/api-token-??????",
         ] },
       ]
     }
@@ -71,7 +71,7 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["ssm:StartSession", "ssm:SendCommand"]
-      resources  = ["arn:aws:ec2:us-east-2:111122223333:instance/*"]
+      resources  = ["arn:aws:ec2:${var.region}:111122223333:instance/*"]
       principals = []
       conditions = [
         { op = "StringEquals", key = "aws:ResourceTag/app", values = ["jarvis"] },
@@ -84,7 +84,7 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["ssm:TerminateSession", "ssm:ResumeSession"]
-      resources  = ["arn:aws:ssm:us-east-2:111122223333:session/*"]
+      resources  = ["arn:aws:ssm:${var.region}:111122223333:session/*"]
       principals = []
       conditions = []
     }
@@ -105,10 +105,10 @@ locals {
       action_key = "Action"
       actions    = ["secretsmanager:PutSecretValue", "secretsmanager:DescribeSecret"]
       resources = [
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work-??????",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal-??????",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/shared-??????",
-        "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/tailscale-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/work-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/personal-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/shared-??????",
+        "arn:aws:secretsmanager:${var.region}:111122223333:secret:jarvis/tailscale-??????",
       ]
       principals = []
       conditions = []
@@ -119,11 +119,11 @@ locals {
       effect     = "Allow"
       action_key = "Action"
       actions    = ["kms:GenerateDataKey", "kms:Decrypt"]
-      resources  = ["arn:aws:kms:us-east-2:111122223333:key/*"]
+      resources  = ["arn:aws:kms:${var.region}:111122223333:key/*"]
       principals = []
       conditions = [
         { op = "ForAnyValue:StringEquals", key = "kms:ResourceAliases", values = ["alias/jarvis"] },
-        { op = "StringEquals", key = "kms:ViaService", values = ["s3.us-east-2.amazonaws.com", "secretsmanager.us-east-2.amazonaws.com"] },
+        { op = "StringEquals", key = "kms:ViaService", values = ["s3.${var.region}.amazonaws.com", "secretsmanager.${var.region}.amazonaws.com"] },
       ]
     }
     # P10
@@ -181,7 +181,7 @@ locals {
       principals = ["*"]
       conditions = [
         { op = "Null", key = "s3:x-amz-server-side-encryption-aws-kms-key-id", values = ["false"] },
-        { op = "StringNotEquals", key = "s3:x-amz-server-side-encryption-aws-kms-key-id", values = ["arn:aws:kms:us-east-2:111122223333:key/11111111-1111-4111-8111-111111111111"] },
+        { op = "StringNotEquals", key = "s3:x-amz-server-side-encryption-aws-kms-key-id", values = ["arn:aws:kms:${var.region}:111122223333:key/11111111-1111-4111-8111-111111111111"] },
       ]
     }
     # P14
@@ -247,7 +247,7 @@ locals {
       principals = ["*"]
       conditions = [
         { op = "Null", key = "s3:x-amz-server-side-encryption-aws-kms-key-id", values = ["false"] },
-        { op = "StringNotEquals", key = "s3:x-amz-server-side-encryption-aws-kms-key-id", values = ["arn:aws:kms:us-east-2:111122223333:key/22222222-2222-4222-8222-222222222222"] },
+        { op = "StringNotEquals", key = "s3:x-amz-server-side-encryption-aws-kms-key-id", values = ["arn:aws:kms:${var.region}:111122223333:key/22222222-2222-4222-8222-222222222222"] },
       ]
     }
     # P19
@@ -287,7 +287,7 @@ locals {
       conditions = [
         { op = "StringEquals", key = "aws:SourceAccount", values = ["111122223333"] },
         { op = "StringEquals", key = "s3:x-amz-acl", values = ["bucket-owner-full-control"] },
-        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:logs:us-east-2:111122223333:*"] },
+        { op = "ArnLike", key = "aws:SourceArn", values = ["arn:aws:logs:${var.region}:111122223333:*"] },
       ]
     }
     # P22

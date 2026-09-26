@@ -26,6 +26,7 @@ DEFAULT_PROFILE = "wsl"          # AD16: "wsl" for a file that predates this cha
 DEFAULT_TOKEN_SOURCE = "file"    # "file" | "secretsmanager"
 DEFAULT_TOKEN_SECRET_WORK = "jarvis/work/api-token"
 DEFAULT_TOKEN_SECRET_PERSONAL = "jarvis/personal/api-token"
+DEFAULT_AWS_REGION = "us-east-1"  # AD34: region literals leave every script, including this one
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_HOTKEY_WORK = "<ctrl>+<alt>+w"
 DEFAULT_HOTKEY_PERSONAL = "<ctrl>+<alt>+p"
@@ -55,6 +56,7 @@ class ClientConfig:
     api_url_personal: str = DEFAULT_API_URL_PERSONAL
     token_source: str = DEFAULT_TOKEN_SOURCE
     aws_profile: str = ""
+    aws_region: str = DEFAULT_AWS_REGION
     token_secret_work: str = DEFAULT_TOKEN_SECRET_WORK
     token_secret_personal: str = DEFAULT_TOKEN_SECRET_PERSONAL
     whisper_exe: str = ""

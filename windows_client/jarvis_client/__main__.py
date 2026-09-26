@@ -32,8 +32,10 @@ def _build_token_sources(cfg: config_mod.ClientConfig) -> dict[str, object]:
     the deploy-engineer report for this known gap."""
     if cfg.token_source == "secretsmanager":
         return {
-            "work": api_mod.SecretsManagerToken(cfg.aws_profile, cfg.token_secret_work),
-            "personal": api_mod.SecretsManagerToken(cfg.aws_profile, cfg.token_secret_personal),
+            "work": api_mod.SecretsManagerToken(
+                cfg.aws_profile, cfg.token_secret_work, region=cfg.aws_region),
+            "personal": api_mod.SecretsManagerToken(
+                cfg.aws_profile, cfg.token_secret_personal, region=cfg.aws_region),
         }
     return {mode: api_mod.FileToken(cfg.token_path) for mode in MODES}
 

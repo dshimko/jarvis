@@ -79,7 +79,9 @@ make plan                              # terraform plan -out plan.out for envs/p
   `jsonencode()` so `terraform test` can inspect them.
 - S3 `aws:kms` without a key id uses the `aws/s3` key; a `StringNotEqualsIfExists` key-id deny
   does not catch it. Deny the header being present without a key id.
-- With the region-deny SCP, every CLI caller must pass `--region us-east-2` explicitly.
+- With the region-deny SCP, every CLI caller must pass `--region` explicitly (AD34: `us-east-1`,
+  read from `$AWS_REGION`/`$JARVIS_REGION` or `/etc/jarvis/region` on the instance -- never a
+  hardcoded literal outside Terraform).
 - An organization CloudTrail trail (`management-events`, us-east-1, multi-region) already
   covers `jarvis-prod`; do not create a member-account trail.
 - In an IAM Deny, `...IfExists` operators evaluate true when the key is absent. To deny only a
@@ -149,3 +151,10 @@ make plan                              # terraform plan -out plan.out for envs/p
   the instance with `ec2 describe-instances` filtered by `tag:app=jarvis`.
 - The box runs two Syncthing instances, so there are two device ids and two ports.
 - Long-running client threads must catch every exception a token source can raise.
+- `close_on_deletion = true` without `prevent_destroy` turns any ForceNew change on
+  `aws_organizations_account` (email) into an account closure; review `org/` plans for
+  "must be replaced".
+- A closed member account stays in its OU as SUSPENDED for 90 days, so the OU cannot be deleted
+  in the same `destroy`.
+- Terraform policy tests with a fixed expected region do not prove region derivation; add a
+  non-default-region run.

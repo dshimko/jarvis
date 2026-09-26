@@ -14,10 +14,10 @@
 mock_provider "aws" {
   # ARN-shaped defaults: the provider validates ARNs even under a mock.
   mock_resource "aws_kms_key" {
-    defaults = { arn = "arn:aws:kms:us-east-2:111122223333:key/00000000-0000-4000-8000-000000000000" }
+    defaults = { arn = "arn:aws:kms:us-east-1:111122223333:key/00000000-0000-4000-8000-000000000000" }
   }
   mock_resource "aws_sns_topic" {
-    defaults = { arn = "arn:aws:sns:us-east-2:111122223333:jarvis-alerts" }
+    defaults = { arn = "arn:aws:sns:us-east-1:111122223333:jarvis-alerts" }
   }
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::111122223333:role/mock" }
@@ -29,19 +29,19 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:s3:::mock-bucket" }
   }
   mock_resource "aws_secretsmanager_secret" {
-    defaults = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/mock-AbCdEf" }
+    defaults = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/mock-AbCdEf" }
   }
   mock_resource "aws_ssoadmin_permission_set" {
     defaults = { arn = "arn:aws:sso:::permissionSet/ssoins-test/ps-0000000000000000" }
   }
   mock_resource "aws_backup_vault" {
-    defaults = { arn = "arn:aws:backup:us-east-2:111122223333:backup-vault:jarvis-backup" }
+    defaults = { arn = "arn:aws:backup:us-east-1:111122223333:backup-vault:jarvis-backup" }
   }
   mock_resource "aws_launch_template" {
     defaults = { id = "lt-0123456789abcdef0", latest_version = 1 }
   }
   mock_resource "aws_cloudwatch_log_group" {
-    defaults = { arn = "arn:aws:logs:us-east-2:111122223333:log-group:/jarvis/mock" }
+    defaults = { arn = "arn:aws:logs:us-east-1:111122223333:log-group:/jarvis/mock" }
   }
 
   override_data {
@@ -86,7 +86,7 @@ run "prod" {
   override_resource {
     target = module.compute.aws_kms_key.jarvis
     values = {
-      arn    = "arn:aws:kms:us-east-2:111122223333:key/11111111-1111-4111-8111-111111111111"
+      arn    = "arn:aws:kms:us-east-1:111122223333:key/11111111-1111-4111-8111-111111111111"
       key_id = "11111111-1111-4111-8111-111111111111"
     }
   }
@@ -108,37 +108,37 @@ run "prod" {
 
   override_resource {
     target = module.observability.aws_sns_topic.alerts
-    values = { arn = "arn:aws:sns:us-east-2:111122223333:jarvis-alerts" }
+    values = { arn = "arn:aws:sns:us-east-1:111122223333:jarvis-alerts" }
   }
 
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.value["work"]
-    values = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work-AAAAAA" }
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/work-AAAAAA" }
   }
 
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.value["personal"]
-    values = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal-BBBBBB" }
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/personal-BBBBBB" }
   }
 
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.value["shared"]
-    values = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/shared-CCCCCC" }
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/shared-CCCCCC" }
   }
 
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.value["tailscale"]
-    values = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/tailscale-DDDDDD" }
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/tailscale-DDDDDD" }
   }
 
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.token["work"]
-    values = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/work/api-token-EEEEEE" }
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/work/api-token-EEEEEE" }
   }
 
   override_resource {
     target = module.secrets.aws_secretsmanager_secret.token["personal"]
-    values = { arn = "arn:aws:secretsmanager:us-east-2:111122223333:secret:jarvis/personal/api-token-FFFFFF" }
+    values = { arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:jarvis/personal/api-token-FFFFFF" }
   }
 
   assert {
@@ -157,7 +157,7 @@ run "bootstrap" {
   override_resource {
     target = aws_kms_key.tfstate
     values = {
-      arn    = "arn:aws:kms:us-east-2:111122223333:key/22222222-2222-4222-8222-222222222222"
+      arn    = "arn:aws:kms:us-east-1:111122223333:key/22222222-2222-4222-8222-222222222222"
       key_id = "22222222-2222-4222-8222-222222222222"
     }
   }
@@ -191,6 +191,11 @@ run "org" {
   }
 
   override_resource {
+    target = aws_organizations_organizational_unit.jarvis
+    values = { id = "ou-test-11111111" }
+  }
+
+  override_resource {
     target = aws_organizations_account.jarvis_prod
     values = { id = "111122223333" }
   }
@@ -203,6 +208,16 @@ run "org" {
   assert {
     condition     = jsonencode(output.attached_scps) == jsonencode(["jarvis-guardrail", "jarvis-org-guard", "jarvis-region-deny"])
     error_message = "With both flags on, all three SCPs must be attached."
+  }
+
+  assert {
+    condition     = aws_organizations_account.jarvis_prod.parent_id == output.ou_id && aws_organizations_account.jarvis_prod.close_on_deletion
+    error_message = "AD35: jarvis-prod must sit in the jarvis OU with close_on_deletion = true."
+  }
+
+  assert {
+    condition     = alltrue([for a in aws_organizations_policy_attachment.scp : a.target_id == output.ou_id])
+    error_message = "AD35: every SCP must be attached to the jarvis OU, not the account."
   }
 }
 
@@ -339,6 +354,11 @@ run "org_scp_type_disabled" {
   }
 
   override_resource {
+    target = aws_organizations_organizational_unit.jarvis
+    values = { id = "ou-test-11111111" }
+  }
+
+  override_resource {
     target = aws_organizations_account.jarvis_prod
     values = { id = "111122223333" }
   }
@@ -379,7 +399,7 @@ run "artifacts_wrong_caller" {
     bucket_name           = "jarvis-artifacts-111122223333"
     sso_role_arn_prefix   = "arn:aws:iam::111122223333:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_"
     caller_arn            = "arn:aws:sts::111122223333:assumed-role/AWSReservedSSO_JarvisOperator_0123456789abcdef/test"
-    kms_key_arn           = "arn:aws:kms:us-east-2:111122223333:key/11111111-1111-4111-8111-111111111111"
+    kms_key_arn           = "arn:aws:kms:us-east-1:111122223333:key/11111111-1111-4111-8111-111111111111"
     instance_role_arn     = "arn:aws:iam::111122223333:role/jarvis-instance"
     bootstrap_source_dir  = "../ops/aws"
     bootstrap_output_path = "envs/prod/.build/bootstrap.tar.gz"

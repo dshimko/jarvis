@@ -50,9 +50,8 @@ plan: ## envs/prod plan (AWS_PROFILE=$(PROD_AWS_PROFILE)); needs infra/envs/prod
 	$(TF) -chdir=$(INFRA)/envs/prod show -no-color plan.out > $(INFRA)/envs/prod/plan.txt
 	@echo "Review $(INFRA)/envs/prod/plan.txt. The human applies; this target never does."
 
-plan-org: ## org/ plan in the management account (AWS_PROFILE=$(ORG_AWS_PROFILE)); needs infra/org/backend.hcl
-	@test -f $(INFRA)/org/backend.hcl || { echo "missing infra/org/backend.hcl (copy backend.hcl.example)"; exit 1; }
-	AWS_PROFILE=$(ORG_AWS_PROFILE) $(TF) -chdir=$(INFRA)/org init -input=false -reconfigure -backend-config=backend.hcl
+plan-org: ## org/ plan in the management account (AWS_PROFILE=$(ORG_AWS_PROFILE)); local state (AD36)
+	AWS_PROFILE=$(ORG_AWS_PROFILE) $(TF) -chdir=$(INFRA)/org init -input=false -reconfigure
 	AWS_PROFILE=$(ORG_AWS_PROFILE) $(TF) -chdir=$(INFRA)/org plan -input=false -out plan.out
 	$(TF) -chdir=$(INFRA)/org show -no-color plan.out > $(INFRA)/org/plan.txt
 	@echo "Review $(INFRA)/org/plan.txt. The human applies; this target never does."
@@ -84,7 +83,7 @@ plan-bootstrap: ## bootstrap/ plan (local state, AWS_PROFILE=$(PROD_AWS_PROFILE)
 # ---------------------------------------------------------------------------------------------
 
 AWS                  ?= aws
-AWS_REGION           ?= us-east-2
+AWS_REGION           ?= us-east-1
 OPERATOR_AWS_PROFILE ?= jarvis-operator
 ARTIFACTS_BUCKET     ?=
 MAKE_CACHE_DIR       := .make

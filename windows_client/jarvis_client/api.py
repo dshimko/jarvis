@@ -24,7 +24,7 @@ DEFAULT_TIMEOUT = 10.0
 SECRETSMANAGER_TIMEOUT = 15.0
 SSE_BACKOFF_START = 1.0
 SSE_BACKOFF_MAX = 30.0
-AWS_REGION = "us-east-2"  # region-deny SCP consequence (PLAN.md 3.2): every aws call is pinned
+AWS_REGION = "us-east-1"  # region-deny SCP consequence (PLAN.md 3.2, AD34): every aws call is pinned
 
 # LOW: on Windows, a plain subprocess.run of aws.exe briefly flashes a console window on every
 # token fetch/refresh; CREATE_NO_WINDOW suppresses it. The flag only exists in the `subprocess`
@@ -125,9 +125,11 @@ class FileToken:
 
 class SecretsManagerToken:
     """AD16: `aws secretsmanager get-secret-value --profile <p> --secret-id <id> --query
-    SecretString --output text --region us-east-2` via subprocess, held in memory only -- never
-    written to disk under the aws profile, never logged. Cached after the first fetch; refresh()
-    always re-fetches (called by JarvisApi once per request, on a 401)."""
+    SecretString --output text --region <region>` via subprocess, held in memory only -- never
+    written to disk under the aws profile, never logged. `region` comes from
+    ClientConfig.aws_region (AD34: region literals leave every script, including this one) and
+    defaults to AWS_REGION when the caller doesn't pass one. Cached after the first fetch;
+    refresh() always re-fetches (called by JarvisApi once per request, on a 401)."""
 
     def __init__(self, aws_profile: str, secret_id: str, region: str = AWS_REGION,
                  runner: Callable[..., "subprocess.CompletedProcess[str]"] | None = None):
