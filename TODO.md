@@ -152,3 +152,10 @@ one-line fix direction. Remove an entry when it is done.
 - [ ] LOW `ops/aws/post-boot-assert.sh`: no live check proves `jarvis-work` is rejected when it connects to the box's own Tailscale IP on 8783 (and 8781/8782 for the other mode); the `-o lo` owner triples cover it and `iptables -C` verifies them, so it is a missing test, not a hole. Direction: `runuser -u jarvis-work -- curl http://$ts_ip:8783/healthz`, expect exit 7.
 - [ ] LOW `Makefile` `tf-validate`: `terraform init -backend=false` in `infra/envs/prod` reuses the cached S3 backend in `.terraform/` and fails once the SSO grant has expired. Direction: run validate with a scratch `TF_DATA_DIR` so `make tf-check` never needs credentials.
 - [ ] LOW `ops/aws/post-boot-assert.sh` check 9 (pre-existing): the `jarvis@<mode> not active yet, bind check skipped` branch prints PASS on a skipped precondition. Direction: the same `SKIP-FAIL` counted line used by checks 4b and 12b.
+
+## From the companion token gate (2026-09-27)
+
+- [ ] LOW `infra/DESIGN.md` P8 (`JarvisOperator` "PutValueSecrets" table row): lists only the
+  4 ARNs for `jarvis/{work,personal,shared,tailscale}`, not the later `jarvis/ofw` (AD34, seventh
+  secret). Direction: add the fifth ARN to the P8 row (docs phase); confirm against the actual
+  Terraform policy (`infra/org/policies.tf`) which ARNs `PutValueSecrets` grants today.

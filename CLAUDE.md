@@ -228,3 +228,19 @@ make plan                              # terraform plan -out plan.out for envs/p
   `TF_DATA_DIR` or a validate run without re-init.
 - Hash a bearer token for a `*_SHA256` key from its exact bytes (`printf %s`), never `echo`,
   which hashes a trailing newline and makes the bearer fail closed.
+- `JarvisOperator` cannot `GetSecretValue` on value secrets at all -- only `PutSecretValue`/
+  `DescribeSecret` (`infra/org/policies.tf`, statement `PutValueSecrets`); the read grant on
+  `secretsmanager:GetSecretValue` belongs to a different permission set (`JarvisClient`), scoped
+  to the token secrets only. Check every new `aws secretsmanager` call added under
+  `OPERATOR_AWS_PROFILE` against that file before writing it -- a PATH-shimmed test cannot catch a
+  real IAM deny, since the shim always answers.
+- Never send an `aws` call's stderr to `/dev/null` in a refusal check: an AccessDenied, an expired
+  SSO token, and the real "no version yet" (`ResourceNotFoundException`) all exit non-zero the
+  same way, so discarding stderr collapses them into whichever message the code guesses first.
+  Capture stderr and branch on the error class (or a fixed fallback label when the CLI's own text
+  carries no class, e.g. an expired SSO token) instead.
+- bash before 5.1 (this includes macOS's `/bin/bash` 3.2) backs every here-document and
+  here-string with a real 0600 temp file under `$TMPDIR` -- unlinked right after it's opened, but
+  briefly present on disk either way. A secret fed to a command's stdin with `<<` or `<<<` is
+  written to disk despite never touching a shell variable file. Use a builtin (`printf`, piped)
+  instead; nothing it writes ever exists as a file.
