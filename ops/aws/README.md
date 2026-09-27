@@ -30,7 +30,8 @@ ops/aws/
     jarvis@.service                the AWS mode daemon unit (User=jarvis-%i, JARVIS_DEPLOYMENT=aws);
                                     ConditionPathExists gates it cleanly until the first release
                                     lands. The WSL/local unit (ops/jarvis@.service) is app-engineer's
-    ofw-mcp.service                the OFW MCP server unit (User=jarvis-ofw, loopback 127.0.0.1:8783);
+    ofw-mcp.service                the OFW MCP server unit (User=jarvis-ofw, loopback plus the
+                                    instance's own Tailscale IPv4 on 8783, amendment 2026-09-27);
                                     ConditionPathExists gates it until a release ships ofw-venv (AD33/AD40)
     jarvis-logexport@.service      exports ${JARVIS_LOGEXPORT_UNIT} (default jarvis@%i.service);
                                     jarvis-logexport@ofw.service.d/unit.conf overrides that variable
@@ -57,11 +58,16 @@ ops/aws/
   Syncthing state, no `jarvis@` unit. `ops/aws/lib/users.sh` creates it with the same
   `create_mode_user` helper as the mode users and, via `runuser` (never root, AD31), only
   `.jarvis`, `.local/state/ofw-mcp`, and `.cache/ms-playwright` under its home.
-- **`ofw-mcp.service`.** Loopback-only (`127.0.0.1:8783`), `ConditionPathExists` on
-  `ofw-venv/bin/ofw-mcp` so it stays a clean skip until deploy-engineer's `jarvis-deploy` ships
-  that venv. Starts from the same hardening block as `jarvis@.service`; a comment in the unit
-  lists the Chromium-related directives phase D may need to relax and in what order to check them
-  (none are relaxed yet).
+- **`ofw-mcp.service`.** `ConditionPathExists` on `ofw-venv/bin/ofw-mcp` so it stays a clean skip
+  until deploy-engineer's `jarvis-deploy` ships that venv. Starts from the same hardening block
+  as `jarvis@.service`; a comment in the unit lists the Chromium-related directives phase D may
+  need to relax and in what order to check them (none are relaxed yet). Amendment 2026-09-27
+  (AD33): `OFW_MCP_BIND=tailscale:8783` -- the server binds loopback plus its own
+  `tailscale ip -4` result (never `0.0.0.0`); OFW Companion on the workstation becomes a
+  read-only consumer of that Tailscale listener, gated by one ACL grant (`infra/modules/
+  tailscale_acl/policy.hujson`) plus its own bearer token (`OFW_MCP_COMPANION_TOKEN_SHA256`).
+  `Wants=`/`After=` gain `tailscaled.service`, same as `jarvis@.service`, since the server now
+  needs a resolved Tailscale IP at start.
 - **`rules.v4` 8783 and 9222 owner rules.** Same three-line shape as 8384/8385: 8783 (the MCP
   port) is ACCEPT uid 0, ACCEPT uid 2002 (`jarvis-personal`), REJECT tcp-reset for everyone else
   -- so `jarvis-work` and `jarvis-ofw` itself cannot connect, only root and personal. 9222 (the
@@ -88,16 +94,20 @@ ops/aws/
   misreport a real `false` as "unknown"); `breaker` is restricted to the `open`/`closed` enum,
   anything else prints "unknown".
 - **`post-boot-assert.sh` additions.** iptables `-C` for all three lines of both the 8783 and
-  9222 owner rules; a dedicated 8783 bind-address check that fails on *any* non-127.0.0.1
-  listener (a Tailscale or VPC address, not only `0.0.0.0`/`*`/`[::]`; guarded on non-empty `ss`
-  output first, since `echo "" | grep -v` matches the single empty line `echo` still emits and
-  would otherwise print a false failure on top of the correct SKIP-FAIL below); a live check
-  that, only once a `127.0.0.1:8783` listener is confirmed (a closed port and a REJECT tcp-reset
-  both give `curl` exit 7, so testing `jarvis-work`'s rejection before that would be a false
-  pass), curls `/healthz` as `jarvis-personal` (expect exit 0) and as `jarvis-work` (expect exit
-  7); when nothing listens at all, an explicit `FAIL: SKIP-FAIL: ...` line, never a silent skip
-  counted as PASS. `jarvis-ofw` is in the IMDS-unreachable loop and the cross-home loop now
-  covers all six ordered pairs of the three users (previously only four); the process-visibility
+  9222 owner rules; a dedicated 8783 bind-address check that, since the amendment 2026-09-27,
+  allows exactly two local addresses -- `127.0.0.1` and the instance's own Tailscale IPv4
+  (resolved the same way as the Syncthing checks, `tailscale ip -4`) -- and fails on any third
+  address (a VPC-private address would pass the loose `0.0.0.0`/`*`/`[::]` check above but must
+  still fail here), and, once `ofw-mcp.service` is confirmed active, requires both addresses to
+  be listening (missing either is a failure, not a skip); a missing Tailscale IPv4 is its own
+  loud failure. Nothing listening at all is not a violation of this check (the separate liveness
+  check below covers "must be listening"). A live check that, only once a `127.0.0.1:8783`
+  listener is confirmed (a closed port and a REJECT tcp-reset both give `curl` exit 7, so testing
+  `jarvis-work`'s rejection before that would be a false pass), curls `/healthz` as
+  `jarvis-personal` (expect exit 0) and as `jarvis-work` (expect exit 7); when nothing listens at
+  all, an explicit `FAIL: SKIP-FAIL: ...` line, never a silent skip counted as PASS. `jarvis-ofw`
+  is in the IMDS-unreachable loop and the cross-home loop now covers all six ordered pairs of the
+  three users (previously only four); the process-visibility
   check adds `jarvis-personal` -> cannot see `jarvis-ofw`, alongside the existing `jarvis-ofw` ->
   cannot see `jarvis-personal`; `/home/jarvis-ofw` is 0700 and owned by `jarvis-ofw`.
 - **`ofw-mcp.service` AD40 amendment: a second start condition.** `ConditionPathExistsGlob=
@@ -139,12 +149,13 @@ present and tolerate its absence with a logged warning.
   and personal too, not just ofw -- this was never a `-1` exit, it was an unhandled exception.
   Fixed by making `APP_ROOT` a `Path`. Not otherwise in scope for this task, but `jarvis-secrets`
   is this phase's file and the fix is one line plus an import.
-- **File length.** `ops/aws/bin/jarvis-secrets` (322 lines) and `ops/aws/post-boot-assert.sh`
-  (349 lines) are over the earlier 300-line guidance after the AD33/AD34 additions and the gate
-  I fix-required round (9222 rule, the amended ofw-vs-merged-env comparison, the 8783 bind and
-  liveness checks); both were already at 287/259 lines before this phase. Left as single files
-  rather than split, since both stay single-purpose and well under the user's global 800-line
-  ceiling; flagged here rather than silently exceeded.
+- **File length.** `ops/aws/bin/jarvis-secrets` (355 lines) and `ops/aws/post-boot-assert.sh`
+  (382 lines) are over the earlier 300-line guidance after the AD33/AD34 additions, the gate I
+  fix-required round (9222 rule, the amended ofw-vs-merged-env comparison, the 8783 bind and
+  liveness checks), and the 2026-09-27 Companion amendment (the two-address 8783 bind check);
+  both were already at 287/259 lines before phase I. Left as single files rather than split,
+  since both stay single-purpose and well under the user's global 800-line ceiling; flagged here
+  rather than silently exceeded.
 - **Bootstrap unpack path.** PLAN.md's bootstrap-engineer role text says user_data unpacks to
   `/opt/jarvis/ops`; DESIGN.md section 6.2 places it at `/opt/jarvis/bootstrap/<sha256>/`. Used
   the DESIGN.md path.

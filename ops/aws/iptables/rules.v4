@@ -12,6 +12,10 @@
 -A OUTPUT -o lo -p tcp --dport 8385 -m owner --uid-owner 0 -j ACCEPT
 -A OUTPUT -o lo -p tcp --dport 8385 -m owner --uid-owner 2002 -j ACCEPT
 -A OUTPUT -o lo -p tcp --dport 8385 -j REJECT --reject-with tcp-reset
+# -o lo only: this triple guards the loopback listener alone and never touches tailscale0.
+# Amendment 2026-09-27 (AD33): ofw-mcp also listens on the instance's Tailscale IPv4 for OFW
+# Companion; that path is protected by the tailnet ACL grant plus the companion bearer token,
+# not by an owner rule (there is no per-uid "owner" on a listener reached from off-box).
 -A OUTPUT -o lo -p tcp --dport 8783 -m owner --uid-owner 0 -j ACCEPT
 -A OUTPUT -o lo -p tcp --dport 8783 -m owner --uid-owner 2002 -j ACCEPT
 -A OUTPUT -o lo -p tcp --dport 8783 -j REJECT --reject-with tcp-reset

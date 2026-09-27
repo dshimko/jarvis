@@ -246,17 +246,36 @@ bootstrap. Confirm the SNS email subscription by clicking the link AWS just sent
 
 ## 3. Populate secrets
 
-Terraform creates six secrets, empty. **Populate four; the instance writes the other two
-itself** (DESIGN.md C14):
+Terraform creates seven secrets, empty. **Populate five; the instance writes the other two
+itself** (DESIGN.md C14; PLAN.md AD34 adds `jarvis/ofw` as the seventh):
 
 | Secret | You populate? | Shape |
 |---|---|---|
 | `jarvis/work` | Yes | `{"SLACK_BOT_TOKEN":"...","SLACK_APP_TOKEN":"...","SLACK_OWNER_USER_ID":"...","SLACK_MCP_URL":"...","SLACK_WORK_TOKEN":"...","GMAIL_MCP_URL":"...","GMAIL_WORK_TOKEN":"...","JEV_API_URL":"...","JEV_API_KEY":"..."}` (optional `"ANTHROPIC_API_KEY"`) |
-| `jarvis/personal` | Yes | `{"TELEGRAM_BOT_TOKEN":"...","TELEGRAM_OWNER_CHAT_ID":"...","GMAIL_MCP_URL":"...","GMAIL_PERSONAL_TOKEN":"...","OFW_MCP_URL":"...","OFW_MCP_TOKEN":"...","GMAIL_WATCH_CLIENT_SECRETS":"<client secrets JSON as a string>","JEV_API_URL":"...","JEV_API_KEY":"..."}` (optional `"ANTHROPIC_API_KEY"`) |
+| `jarvis/personal` | Yes | `{"TELEGRAM_BOT_TOKEN":"...","TELEGRAM_OWNER_CHAT_ID":"...","GMAIL_MCP_URL":"...","GMAIL_PERSONAL_TOKEN":"...","OFW_MCP_URL":"...","OFW_MCP_TOKEN":"...","OFW_MCP_WRITE_TOKEN":"...","GMAIL_WATCH_CLIENT_SECRETS":"<client secrets JSON as a string>","JEV_API_URL":"...","JEV_API_KEY":"..."}` (optional `"ANTHROPIC_API_KEY"`) |
 | `jarvis/shared` | Yes (may be `{}`) | Any key here is merged into both modes; DESIGN.md 5 |
+| `jarvis/ofw` | Yes, once populated (optional until then, AD34) | `{"OFW_USERNAME":"...","OFW_PASSWORD":"...","OFW_MCP_TOKEN_SHA256":"...","OFW_MCP_WRITE_TOKEN_SHA256":"..."}`, optional `"OFW_MCP_COMPANION_TOKEN_SHA256"` (OFW Companion's own read-only bearer, rotated independently) and optional `"OFW_RECIPIENTS"` (`alias=<ofw recipient id>[,...]`). Written raw (`KEY=value`, no quoting) to `/home/jarvis-ofw/.jarvis/env`; ofw-mcp refuses to start without it |
 | `jarvis/tailscale` | Yes, once | `{"authkey": "tskey-auth-..."}` |
 | `jarvis/work/api-token` | No | Plain 64-hex string, written by the instance (AD6) |
 | `jarvis/personal/api-token` | No | Plain 64-hex string, written by the instance (AD6) |
+
+`jarvis/ofw` holds hashes, not the two bearer tokens themselves: `OFW_MCP_TOKEN` and
+`OFW_MCP_WRITE_TOKEN` live in `jarvis/personal` (the executor's own copies); generate each with
+`openssl rand -hex 32`, put the sha256 of each value into the matching `jarvis/ofw` key, and
+never store a raw token and its hash in the same secret. The companion token works the same way:
+generate it with `openssl rand -hex 32`, store its sha256 as `OFW_MCP_COMPANION_TOKEN_SHA256` in
+`jarvis/ofw`, and give the raw (unhashed) token to OFW Companion's own `make ofw-auth` (a
+Companion-repo command, not part of this repo) so Companion can present it as its bearer.
+
+Hash every `*_SHA256` value with, exactly:
+```
+tok="<the raw token>"
+printf %s "$tok" | openssl dgst -sha256 -r | cut -d' ' -f1
+```
+`printf %s`, not `echo`: `echo` appends a trailing newline, which `openssl dgst` would hash as
+part of the input, producing a digest that does not match the sha256 of the raw token the
+server actually receives as a bearer -- the server would then reject every request with that
+token as unauthorized.
 
 A value that is identical in both `jarvis/work` and `jarvis/personal` (e.g. a shared
 `GMAIL_MCP_URL`) fails `jarvis-secrets sync` unless its key lives in `jarvis/shared` instead --
@@ -297,14 +316,23 @@ The JSON below shows the shape only; the values are placeholders.
    Expected: no output.
 4. Repeat steps 1 to 3 for `jarvis/personal` (shape in the table above) and `jarvis/shared` (`{}`
    is a valid value if you have nothing to share), changing `--secret-id` each time.
-5. Create a one-off Tailscale auth key in the admin console (Settings > Keys > Generate auth
+5. `jarvis/ofw` is optional at first boot (`jarvis-secrets sync` skips it cleanly and still
+   writes work/personal, AD34). Populate it once OFW access is ready to go live:
+   `openssl rand -hex 32` for `OFW_MCP_TOKEN` and `OFW_MCP_WRITE_TOKEN` (put the raw values in
+   `jarvis/personal`, their hash -- using the exact `printf %s | openssl dgst -sha256 -r`
+   command above, never `echo` -- in `jarvis/ofw`'s `OFW_MCP_TOKEN_SHA256` /
+   `OFW_MCP_WRITE_TOKEN_SHA256`); `openssl rand -hex 32` again for the OFW Companion bearer (give
+   the raw value to Companion's `make ofw-auth`, put its hash the same way in `jarvis/ofw`'s
+   `OFW_MCP_COMPANION_TOKEN_SHA256`). Assemble and upload `jarvis/ofw` the same way as steps 1 to
+   3 above, `--secret-id jarvis/ofw`.
+6. Create a one-off Tailscale auth key in the admin console (Settings > Keys > Generate auth
    key): **Reusable: off, Ephemeral: off, Pre-authorized: on, Tags: `tag:jarvis`, Expiry: 1 day**
    (`tag:jarvis` is owned by `autogroup:admin`, so you need admin rights on the tailnet). Copy
    the JSON to the clipboard. Shape (display only):
    ```
    {"authkey": "tskey-auth-<value>"}
    ```
-6. Upload it from the clipboard:
+7. Upload it from the clipboard:
    ```
    pbpaste | AWS_PROFILE=jarvis-operator aws secretsmanager put-secret-value --secret-id jarvis/tailscale --secret-string file:///dev/stdin --region us-east-1
    ```
@@ -319,6 +347,24 @@ The JSON below shows the shape only; the values are placeholders.
    ```
    Nothing on the box reads it again outside a manual key rotation (section 7 in
    RUNBOOK-ops.md).
+
+### 3.1 OFW Companion as a consumer (PLAN.md AD33 amendment, 2026-09-27)
+
+OFW Companion on the workstation no longer runs its own browser; it reads `ofw-mcp` over
+Tailscale, read-only. Facts:
+
+- **Precondition: the ACL grant.** `tag:jarvis` must accept `tcp:8783` from the workstation
+  group before Companion can reach the box at all -- section 2.5 above (apply or paste
+  `policy.hujson`) must already include the `tcp:8783` entry.
+- **`OFW_MCP_URL=http://jarvis:8783/mcp`** is Companion's own config (a Companion-repo setting,
+  not a key in any secret this repo manages). `jarvis` is the box's Tailscale MagicDNS name
+  (`tailscale up --hostname=jarvis`).
+- **Auth: the companion bearer token**, from step 5 above -- the raw value goes into Companion's
+  `make ofw-auth`, its sha256 into `jarvis/ofw`'s `OFW_MCP_COMPANION_TOKEN_SHA256`.
+- **Read-only scope.** The companion token lists and serves only the read tools (write tools are
+  absent from `tools/list` and return "unknown tool" on `tools/call`); Companion's own `/send`
+  stub returns not-implemented. The Jarvis outbox stays the only path that sends an OFW message
+  or files an OFW entry.
 
 Now do section 2.6 (flip `instance_enabled = true` and apply).
 
