@@ -321,10 +321,39 @@ The JSON below shows the shape only; the values are placeholders.
    `openssl rand -hex 32` for `OFW_MCP_TOKEN` and `OFW_MCP_WRITE_TOKEN` (put the raw values in
    `jarvis/personal`, their hash -- using the exact `printf %s | openssl dgst -sha256 -r`
    command above, never `echo` -- in `jarvis/ofw`'s `OFW_MCP_TOKEN_SHA256` /
-   `OFW_MCP_WRITE_TOKEN_SHA256`); `openssl rand -hex 32` again for the OFW Companion bearer (give
-   the raw value to Companion's `make ofw-auth`, put its hash the same way in `jarvis/ofw`'s
-   `OFW_MCP_COMPANION_TOKEN_SHA256`). Assemble and upload `jarvis/ofw` the same way as steps 1 to
-   3 above, `--secret-id jarvis/ofw`.
+   `OFW_MCP_WRITE_TOKEN_SHA256`). Assemble and upload `jarvis/ofw` the same way as steps 1 to
+   3 above, `--secret-id jarvis/ofw`, before continuing to the Companion bearer below.
+
+   Then, on the workstation (macOS): `make ofw-companion-token`. It generates the OFW Companion
+   bearer with `openssl rand -hex 32`, hashes it the same exact way, merges the hash into
+   `jarvis/ofw`'s `OFW_MCP_COMPANION_TOKEN_SHA256` with `get-secret-value` / `put-secret-value`
+   (refusing with a clear message, no upload, if `jarvis/ofw` has no version yet -- i.e. the
+   `OFW_MCP_TOKEN`/`OFW_MCP_WRITE_TOKEN` step above hasn't been uploaded), and stores the raw
+   token in the same macOS Keychain entries Companion's own `make ofw-auth` uses (`ofw-auth.ts`
+   has no non-interactive input, so this writes those Keychain entries directly instead of
+   driving it; the token travels to `security` over stdin, in `-i` mode, never as an argv element).
+   It prints only which secret it updated, the new hash's first 8 hex characters to cross-check
+   against `aws secretsmanager get-secret-value`, and a reminder to run `make secrets-sync` next;
+   it never prints the token or the full hash.
+
+   **Profile:** `make ofw-companion-token` runs under `PROD_AWS_PROFILE` (`jarvis-prod` by
+   default -- the same profile `make plan` uses), not `OPERATOR_AWS_PROFILE` like every other
+   deploy target. `JarvisOperator` can only `PutSecretValue`/`DescribeSecret` on value secrets,
+   never `GetSecretValue` (`infra/org/policies.tf`, statement `PutValueSecrets`); reading and
+   merging `jarvis/ofw` needs the admin profile. A failure to read or write the secret for any
+   reason other than "no version yet" (AccessDenied, an expired SSO token, a network error, ...)
+   prints `FAIL: get-secret-value failed: <ErrorClass>` (or `put-secret-value failed: <ErrorClass>`)
+   with the AWS exception class only, never the full error text.
+
+   **Rotation order:** `make ofw-companion-token` only updates `jarvis/ofw` and this workstation's
+   Keychain. The box itself still has the *old* hash in `/home/jarvis-ofw/.jarvis/env` -- Companion
+   gets HTTP 401 -- until the box picks up the new one. Always run the two steps in this order:
+   `make ofw-companion-token`, then `make secrets-sync`, then Companion works again.
+
+   Manual fallback (non-macOS, or when `make ofw-companion-token` isn't available): `openssl rand
+   -hex 32` for the OFW Companion bearer, give the raw value to Companion's `make ofw-auth`, and
+   put its hash the same way in `jarvis/ofw`'s `OFW_MCP_COMPANION_TOKEN_SHA256`, assembled and
+   uploaded the same way as steps 1 to 3 above, `--secret-id jarvis/ofw`.
 6. Create a one-off Tailscale auth key in the admin console (Settings > Keys > Generate auth
    key): **Reusable: off, Ephemeral: off, Pre-authorized: on, Tags: `tag:jarvis`, Expiry: 1 day**
    (`tag:jarvis` is owned by `autogroup:admin`, so you need admin rights on the tailnet). Copy
@@ -359,8 +388,10 @@ Tailscale, read-only. Facts:
 - **`OFW_MCP_URL=http://jarvis:8783/mcp`** is Companion's own config (a Companion-repo setting,
   not a key in any secret this repo manages). `jarvis` is the box's Tailscale MagicDNS name
   (`tailscale up --hostname=jarvis`).
-- **Auth: the companion bearer token**, from step 5 above -- the raw value goes into Companion's
-  `make ofw-auth`, its sha256 into `jarvis/ofw`'s `OFW_MCP_COMPANION_TOKEN_SHA256`.
+- **Auth: the companion bearer token**, from step 5 above -- `make ofw-companion-token` writes the
+  raw value into the same macOS Keychain entries Companion's own `make ofw-auth` uses, and its
+  sha256 into `jarvis/ofw`'s `OFW_MCP_COMPANION_TOKEN_SHA256` (manual fallback: run `make
+  ofw-auth` by hand and paste the token when prompted).
 - **Read-only scope.** The companion token lists and serves only the read tools (write tools are
   absent from `tools/list` and return "unknown tool" on `tools/call`); Companion's own `/send`
   stub returns not-implemented. The Jarvis outbox stays the only path that sends an OFW message

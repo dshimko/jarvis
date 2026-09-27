@@ -103,7 +103,7 @@ OFW_MCP_SKIP         ?=
 OFW_PORT             ?= 9222
 OFW_WAIT_SECONDS     ?= 900
 
-.PHONY: help release deploy status restart secrets-sync sync-agents oauth-login ofw-login ofw-reset test clean
+.PHONY: help release deploy status restart secrets-sync sync-agents oauth-login ofw-login ofw-reset ofw-companion-token test clean
 
 help: ## list available targets and what each one does
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -184,6 +184,15 @@ ofw-login: $(INSTANCE_ID_FILE) ## make ofw-login [OFW_WAIT_SECONDS=900]; SSM por
 ofw-reset: $(INSTANCE_ID_FILE) ## close the ofw-mcp login breaker (clears a device/MFA challenge lockout)
 	AWS_PROFILE=$(OPERATOR_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
 	  scripts/ssm-run.sh jarvis-ofw-reset "$$(cat $(INSTANCE_ID_FILE))" $(SSM_DEFAULT_TIMEOUT_S)
+
+# Gate fix (2026-09-27): JarvisOperator cannot GetSecretValue on value secrets (only
+# PutSecretValue/DescribeSecret, infra/org/policies.tf "PutValueSecrets"), so unlike every other
+# target in this section, ofw-companion-token uses PROD_AWS_PROFILE -- the same profile `make
+# plan` uses. Populating jarvis/ofw is an admin step, not a day-to-day deploy operation. Follow it
+# with `make secrets-sync` (rotation order, infra/RUNBOOK.md section 3).
+ofw-companion-token: ## generate/rotate OFW Companion's read-only ofw-mcp bearer token (jarvis/ofw + macOS Keychain, PROD_AWS_PROFILE); never prints the token or full hash
+	AWS_PROFILE=$(PROD_AWS_PROFILE) AWS_REGION=$(AWS_REGION) \
+	  scripts/ofw-companion-token.sh
 
 test: ## whole repo suite (tests/ and windows_client/tests/, per pytest.ini)
 	.venv/bin/pytest -q
