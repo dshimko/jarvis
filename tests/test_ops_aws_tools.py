@@ -207,6 +207,32 @@ def test_cmd_sync_writes_ofw_via_the_shim_as_jarvis_ofw(monkeypatch):
     assert work_input == "WORK_KEY='work-only-value-aaaa'\n"
 
 
+# AD34 amendment 2026-09-27: OFW_MCP_COMPANION_TOKEN_SHA256 (Companion's read-only bearer hash)
+# is just another jarvis/ofw key -- validate_keys() checks format only, so it needs no special
+# case, and it must be written raw (byte for byte) exactly like the other ofw keys.
+def test_cmd_sync_writes_companion_token_hash_raw_like_other_ofw_keys(monkeypatch):
+    mod = load_module("jarvis_secrets_sync_ofw_companion_token", JARVIS_SECRETS_PATH)
+    write_calls: list = []
+    secrets = {
+        "jarvis/work": {"WORK_KEY": "work-only-value-aaaa"},
+        "jarvis/personal": {"PERSONAL_KEY": "personal-only-value-bbbb"},
+        "jarvis/shared": {},
+        "jarvis/ofw": {
+            "OFW_USERNAME": "someone",
+            "OFW_MCP_COMPANION_TOKEN_SHA256": "a" * 64,
+        },
+    }
+    monkeypatch.setattr(mod, "region", lambda: "us-east-1")
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run_factory(secrets, write_calls))
+
+    assert mod.cmd_sync() == 0
+    ofw_input = next(text for user, text in write_calls if user == "jarvis-ofw")
+    assert ofw_input.splitlines() == [
+        f"OFW_MCP_COMPANION_TOKEN_SHA256={'a' * 64}",
+        "OFW_USERNAME=someone",
+    ]
+
+
 def test_cmd_sync_pairwise_violation_blocks_all_three_writes_key_names_only(monkeypatch, capsys):
     mod = load_module("jarvis_secrets_sync_violation", JARVIS_SECRETS_PATH)
     write_calls: list = []

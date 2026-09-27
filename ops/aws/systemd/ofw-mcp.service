@@ -1,7 +1,7 @@
 [Unit]
 Description=OFW MCP server (jarvis-ofw)
-Wants=network-online.target
-After=network-online.target jarvis-secrets.service jarvis-imds-guard.service
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service jarvis-secrets.service jarvis-imds-guard.service
 Requires=jarvis-secrets.service jarvis-imds-guard.service
 StartLimitIntervalSec=0
 # Skipped cleanly (not crash-looping) until a release ships the ofw-mcp wheel and its own venv;
@@ -24,7 +24,10 @@ User=jarvis-ofw
 Group=jarvis-ofw
 WorkingDirectory=/opt/jarvis/current
 Environment=OFW_MCP_PROFILE=aws
-Environment=OFW_MCP_BIND=127.0.0.1:8783
+# Amendment 2026-09-27 (PLAN.md AD33): OFW Companion becomes a read-only consumer over
+# Tailscale, so the server binds loopback plus the Tailscale IPv4 it resolves itself at start
+# (never 0.0.0.0); the ACL grant plus the companion bearer token protect that listener.
+Environment=OFW_MCP_BIND=tailscale:8783
 Environment=OFW_TZ=America/Detroit
 Environment=HOME=/home/jarvis-ofw
 Environment=PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright

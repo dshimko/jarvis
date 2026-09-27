@@ -14,13 +14,14 @@
     "tag:jarvis": ["autogroup:admin"],
   },
 
-  // One grant: the workstation group reaches the two APIs and the two Syncthing ports.
-  // Nothing has tag:jarvis as a source, so the server initiates nothing.
+  // One grant: the workstation group reaches the two APIs, the two Syncthing ports, and (AD33,
+  // amendment 2026-09-27) ofw-mcp's read-only port for OFW Companion. Nothing has tag:jarvis as
+  // a source, so the server initiates nothing.
   "grants": [
     {
       "src": ["group:jarvis-workstation"],
       "dst": ["tag:jarvis"],
-      "ip":  ["tcp:8781", "tcp:8782", "tcp:22000", "udp:22000", "tcp:22001", "udp:22001"],
+      "ip":  ["tcp:8781", "tcp:8782", "tcp:8783", "tcp:22000", "udp:22000", "tcp:22001", "udp:22001"],
     },
   ],
 
@@ -29,7 +30,7 @@
   "tests": [
     {
       "src":    "REPLACE_ME@example.com",
-      "accept": ["tag:jarvis:8781", "tag:jarvis:8782", "tag:jarvis:22000", "tag:jarvis:22001"],
+      "accept": ["tag:jarvis:8781", "tag:jarvis:8782", "tag:jarvis:8783", "tag:jarvis:22000", "tag:jarvis:22001"],
       "deny":   ["tag:jarvis:22", "tag:jarvis:8384", "tag:jarvis:8385"],
     },
     {

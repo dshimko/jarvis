@@ -195,7 +195,10 @@ def test_ofw_mcp_service_shape_and_hardening():
         "ConditionPathExistsGlob=/home/jarvis-ofw/.jarvis/env",
         "Requires=jarvis-secrets.service jarvis-imds-guard.service",
         "Environment=OFW_MCP_PROFILE=aws",
-        "Environment=OFW_MCP_BIND=127.0.0.1:8783",
+        # Amendment 2026-09-27 (AD33): the server now binds loopback plus its own resolved
+        # Tailscale IPv4, never 0.0.0.0; OFW Companion becomes a read-only consumer over that
+        # listener, protected by the ACL grant plus its own bearer token.
+        "Environment=OFW_MCP_BIND=tailscale:8783",
         "Environment=OFW_TZ=America/Detroit",
         "Environment=HOME=/home/jarvis-ofw",
         "Environment=PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright",
@@ -210,6 +213,10 @@ def test_ofw_mcp_service_shape_and_hardening():
     ):
         assert expected in text, f"missing directive: {expected!r}"
     assert re.search(r"^After=.*jarvis-secrets\.service.*jarvis-imds-guard\.service", text, re.MULTILINE)
+    # Amendment 2026-09-27 (AD33): tailscaled.service joins Wants=/After=, same as
+    # jarvis@.service, since the server now resolves its own Tailscale IPv4 at start.
+    assert re.search(r"^Wants=.*tailscaled\.service", text, re.MULTILINE)
+    assert re.search(r"^After=network-online\.target tailscaled\.service", text, re.MULTILINE)
 
 
 # Every hardening/gating directive named here must be byte-for-byte identical between
@@ -356,7 +363,15 @@ def test_post_boot_assert_covers_ofw_checks():
     assert "jarvis-personal reaches /healthz on 127.0.0.1:8783" in text
     assert "iptables 8783 owner rule" in text
     assert "iptables 9222 owner rule" in text
-    assert "port 8783 has a listener whose local address is not 127.0.0.1" in text
+    # Amendment 2026-09-27 (AD33): 8783 now legitimately listens on 127.0.0.1 AND the instance's
+    # Tailscale IPv4 (OFW Companion consumer); any third address is still a violation, and once
+    # ofw-mcp is active both must be present.
+    assert "cannot resolve this instance's Tailscale IPv4, cannot verify port 8783 listen addresses" in text
+    assert "port 8783 has a listener whose local address is neither 127.0.0.1 nor" in text
+    assert "port 8783 is missing its loopback or Tailscale listener" in text
+    # A skipped precondition (ofw-mcp not active yet) must never print PASS.
+    assert "SKIP-FAIL: ofw-mcp not active, cannot verify 8783 dual listener" in text
+    assert "ofw-mcp not active yet, 8783 dual-listener check skipped" not in text
     assert "jarvis-ofw cannot see jarvis-personal processes" in text
     assert "jarvis-personal cannot see jarvis-ofw processes" in text
     assert "/home/jarvis-ofw is 0700" in text

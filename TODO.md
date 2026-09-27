@@ -146,3 +146,9 @@ one-line fix direction. Remove an entry when it is done.
 
 - [ ] LOW `ops/aws/bin/jarvis-secrets` `validate_keys`: the `'` and `${` rejections exist for the single-quoted python-dotenv mode files, but also apply to `jarvis/ofw`, which is written raw for ofw-mcp's `read_raw_env`; an OFW password containing `'` is refused. Direction: a raw-target validator that rejects only CR and LF for `ofw`.
 - [ ] MEDIUM `tests/test_ops_aws_tools.py`: the ofw target's value handling is confirmed only by reading the code. Add a test that (1) a value containing `#`, `=`, and spaces reaches the `jarvis-ofw` env body unquoted and unchanged, and (2) a value containing `'` or `${` returns 1 with only the key name in the output; mutation-test it.
+
+## From the companion-consumer gate (2026-09-27)
+
+- [ ] LOW `ops/aws/post-boot-assert.sh`: no live check proves `jarvis-work` is rejected when it connects to the box's own Tailscale IP on 8783 (and 8781/8782 for the other mode); the `-o lo` owner triples cover it and `iptables -C` verifies them, so it is a missing test, not a hole. Direction: `runuser -u jarvis-work -- curl http://$ts_ip:8783/healthz`, expect exit 7.
+- [ ] LOW `Makefile` `tf-validate`: `terraform init -backend=false` in `infra/envs/prod` reuses the cached S3 backend in `.terraform/` and fails once the SSO grant has expired. Direction: run validate with a scratch `TF_DATA_DIR` so `make tf-check` never needs credentials.
+- [ ] LOW `ops/aws/post-boot-assert.sh` check 9 (pre-existing): the `jarvis@<mode> not active yet, bind check skipped` branch prints PASS on a skipped precondition. Direction: the same `SKIP-FAIL` counted line used by checks 4b and 12b.

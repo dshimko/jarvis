@@ -360,7 +360,8 @@ with the human present, read-only, printing counts.
   port and a reset both give `curl` exit 7), `jarvis-personal` reaches `/healthz`,
   `jarvis-personal` connects, `jarvis-ofw` gets `curl` exit 7 from IMDS (the IMDS guard asserts
   uid 2003 too), `jarvis-ofw` cannot read `/home/jarvis-personal` and vice versa, `ofw-mcp`
-  is not listening on any non-loopback address. `jarvis/personal` gains
+  is not listening on any address other than loopback and, since the 2026-09-27 amendment below,
+  the instance's Tailscale IPv4. `jarvis/personal` gains
   `OFW_MCP_URL=http://127.0.0.1:8783/mcp`; `env/personal.env.example` replaces the vercel
   example with that value. The unit starts from the `jarvis@.service` hardening block;
   Chromium-required relaxations (`ProcSubset`, `RestrictNamespaces`, `/dev/shm`, sandbox
@@ -372,12 +373,25 @@ with the human present, read-only, printing counts.
   OFW blocks the instance's egress IP: run `ofw-mcp` on the WSL box bound to the workstation's
   Tailscale IP, `OFW_MCP_URL=http://<workstation MagicDNS>:8783/mcp`, one ACL grant
   `tag:jarvis -> workstation tcp:8783` (deviation from AD24's "tag:jarvis initiates nothing",
-  applied by the human only then); the server today accepts only a loopback bind, so the
-  fallback also needs a code change allowing a `100.64.0.0/10` bind under the local profile,
-  made only after the phase D decision. No residential proxies, no further evasion of any kind.
+  applied by the human only then). Amendment 2026-09-27 (the human's decision after the live
+  read check): OFW Companion on the workstation stops running its own browser and becomes a
+  read-only consumer of ofw-mcp. On the instance the server binds loopback plus the Tailscale
+  IPv4 (`OFW_MCP_BIND=tailscale:8783`, resolved with `tailscale ip -4` at start, refusing to
+  start otherwise, never `0.0.0.0`; `Host` allowlist adds the Tailscale IP, `jarvis`, and
+  `*.ts.net`), and the ACL gains one grant from the workstation to `tag:jarvis` on tcp 8783,
+  the same direction and shape as the 8781 and 8782 grants (AD24; `tag:jarvis` still initiates
+  nothing). Companion holds its own read-only bearer (`OFW_MCP_COMPANION_TOKEN_SHA256` in
+  `jarvis/ofw`, AD34), reaches `http://jarvis:8783/mcp`, and its `/send` stub returns not
+  implemented: the Jarvis outbox stays the only send path. The loopback owner rules keep
+  protecting the loopback listener; the Tailscale listener is protected by the ACL and the
+  token. `post-boot-assert` allows exactly those two addresses for 8783. The WSL fallback
+  above remains only for the case that OFW blocks the instance's egress IP. No residential
+  proxies, no further evasion of any kind.
 - **AD34 Secrets and tokens.** Terraform `secrets` module adds value secret `jarvis/ofw`
   (created empty; keys `OFW_USERNAME`, `OFW_PASSWORD`, `OFW_MCP_TOKEN_SHA256`,
-  `OFW_MCP_WRITE_TOKEN_SHA256`, and optional `OFW_RECIPIENTS` = `alias=<ofw recipient id>[,...]`,
+  `OFW_MCP_WRITE_TOKEN_SHA256`, optional `OFW_MCP_COMPANION_TOKEN_SHA256` (a second read-only
+  bearer for OFW Companion, rotated independently; amendment 2026-09-27), and optional
+  `OFW_RECIPIENTS` = `alias=<ofw recipient id>[,...]`,
   initially `coparent=<id>` found in phase S). The instance role's `GetSecretValue` list and the
   matching `kms:EncryptionContext:SecretARN` list gain this one ARN (recorded deviation from
   brief section 2, same kind as G4); seven secrets in total. `jarvis-secrets sync` handles a
@@ -589,7 +603,8 @@ with the human present, read-only, printing counts.
   `jarvis-deploy`, so a fresh box still ends with Chromium installed. `ofw-mcp.service`
   (`ops/aws/systemd/ofw-mcp.service`): `ExecStart=/opt/jarvis/current/ofw-venv/bin/ofw-mcp
   serve`, `ConditionPathExists` on that binary, `Environment=OFW_MCP_PROFILE=aws
-  OFW_MCP_BIND=127.0.0.1:8783 OFW_TZ=America/Detroit HOME=/home/jarvis-ofw
+  OFW_MCP_BIND=tailscale:8783 (loopback plus the Tailscale IPv4; AD33 amendment 2026-09-27)
+  OFW_TZ=America/Detroit HOME=/home/jarvis-ofw
   PLAYWRIGHT_BROWSERS_PATH=/home/jarvis-ofw/.cache/ms-playwright`,
   `Requires=jarvis-secrets.service jarvis-imds-guard.service`, `After=` the same plus
   `network-online.target`. SSM documents (AD19 list grows to six; phase I ships them as

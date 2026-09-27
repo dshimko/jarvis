@@ -220,3 +220,11 @@ make plan                              # terraform plan -out plan.out for envs/p
   scratch, run the full suite there.
 - `python3 -m py_compile` on `ops/aws/bin/*` leaves an ignored `__pycache__` behind; harmless, but
   a reviewer's compile check is not a no-op on the tree.
+- Locally originated traffic to the box's own Tailscale IP leaves through `lo`, so the
+  `-o lo` owner rules still cover the ofw-mcp Tailscale listener for local uids. Never add
+  `-d 127.0.0.1` to the 8783 or 9222 triples, or local uids would reach that listener.
+- `terraform init -backend=false` in a directory already initialised with the S3 backend still
+  reads that cached backend and fails when SSO has expired; `make tf-validate` needs a fresh
+  `TF_DATA_DIR` or a validate run without re-init.
+- Hash a bearer token for a `*_SHA256` key from its exact bytes (`printf %s`), never `echo`,
+  which hashes a trailing newline and makes the bearer fail closed.

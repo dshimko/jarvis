@@ -71,19 +71,55 @@ else
   pass "nothing listens on port 22"
 fi
 
-# 4b. AD33 (gate finding G-ofw1): any 8783 listener not on exactly 127.0.0.1 is a violation --
-# a Tailscale (100.64.0.0/10) or VPC-private address would pass the loose 0.0.0.0/*/[::] check
-# above but must still fail here. Nothing listening at all is not a violation of this check (the
-# separate liveness check below covers "must be listening").
-port_8783_lines=$(echo "$listeners" | grep -E ':8783([^0-9]|$)' || true)
-# G: `echo "" | grep -v` matches the single empty line `echo` still emits, so this must be
-# guarded on non-empty output first -- otherwise "nothing listening" prints a false FAIL here
-# on top of the separate, correct SKIP-FAIL from the liveness check below.
-if [ -n "$port_8783_lines" ] && \
-   echo "$port_8783_lines" | grep -vqE '(^|[^0-9.])127\.0\.0\.1:8783([^0-9]|$)'; then
-  failcheck "port 8783 has a listener whose local address is not 127.0.0.1"
+# 4b. AD33 amendment 2026-09-27: OFW Companion is now a read-only consumer of ofw-mcp over
+# Tailscale, so 8783 legitimately listens on exactly two local addresses -- 127.0.0.1 (owner-
+# gated by the iptables rule) and this instance's own Tailscale IPv4 (gated by the ACL grant plus
+# the companion bearer token). Resolved the same way the Syncthing checks below resolve it
+# (`tailscale ip -4`, unprivileged as root works fine since tailscaled itself runs as root).
+# Any address outside that pair is still a violation (gate finding G-ofw1: a Tailscale or VPC
+# address would pass the loose 0.0.0.0/*/[::] check above but must still fail here). Nothing
+# listening at all is not a violation of this check (the separate liveness check below covers
+# "must be listening"); a missing Tailscale IPv4 is its own loud failure, never a silent pass.
+ts_ip=$(tailscale ip -4 2>/dev/null)
+if [ -z "$ts_ip" ]; then
+  failcheck "cannot resolve this instance's Tailscale IPv4, cannot verify port 8783 listen addresses"
 else
-  pass "port 8783 has no listener bound to a non-loopback address"
+  port_8783_lines=$(echo "$listeners" | grep -E ':8783([^0-9]|$)' || true)
+  loopback_seen=0
+  tailscale_seen=0
+  bad_addr=0
+  # G: `echo "" | grep -v` matches the single empty line `echo` still emits, so this loop is
+  # skipped entirely (not just guarded on the -v grep below) when nothing is listening at all.
+  if [ -n "$port_8783_lines" ]; then
+    while IFS= read -r line; do
+      if echo "$line" | grep -qE "(^|[^0-9.])127\.0\.0\.1:8783([^0-9]|$)"; then
+        loopback_seen=1
+      elif echo "$line" | grep -qE "(^|[^0-9.])${ts_ip}:8783([^0-9]|$)"; then
+        tailscale_seen=1
+      else
+        bad_addr=1
+      fi
+    done <<< "$port_8783_lines"
+  fi
+
+  if [ "$bad_addr" -eq 1 ]; then
+    failcheck "port 8783 has a listener whose local address is neither 127.0.0.1 nor $ts_ip"
+  else
+    pass "port 8783 has no listener bound to a disallowed address"
+  fi
+
+  if systemctl is-active ofw-mcp.service >/dev/null 2>&1; then
+    if [ "$loopback_seen" -eq 1 ] && [ "$tailscale_seen" -eq 1 ]; then
+      pass "port 8783 listens on both 127.0.0.1 and $ts_ip while ofw-mcp is active"
+    else
+      failcheck "ofw-mcp is active but port 8783 is missing its loopback or Tailscale listener (loopback=$loopback_seen tailscale=$tailscale_seen)"
+    fi
+  else
+    # A skipped precondition never prints PASS (matches check 12b's SKIP-FAIL): ofw-mcp not
+    # being active yet means this check proved nothing about the dual-listener requirement, not
+    # that it held.
+    failcheck "SKIP-FAIL: ofw-mcp not active, cannot verify 8783 dual listener"
+  fi
 fi
 
 # 5. ssh.service masked.
@@ -166,7 +202,7 @@ for mode in work personal; do
 done
 
 # 9. APIs bound to the Tailscale IP -- only meaningful once a release has deployed jarvis@.
-ts_ip=$(tailscale ip -4 2>/dev/null)
+# ts_ip was already resolved in check 4b above.
 for entry in work:8781 personal:8782; do
   mode="${entry%%:*}"
   port="${entry##*:}"
