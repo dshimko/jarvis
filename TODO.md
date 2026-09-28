@@ -3,6 +3,33 @@
 Findings left unfixed after a review gate (MEDIUM and below), with a file reference and a
 one-line fix direction. Remove an entry when it is done.
 
+## From the AWS setup session (2026-09-27)
+
+- [ ] LOW `infra/DESIGN.md` P8 (`JarvisOperator` "PutValueSecrets" table row): lists only the
+  4 ARNs for `jarvis/{work,personal,shared,tailscale}`, not the later `jarvis/ofw` (AD34, seventh
+  secret). Direction: add the fifth ARN to the P8 row (docs phase); confirm against the actual
+  Terraform policy (`infra/org/policies.tf`) which ARNs `PutValueSecrets` grants today.
+- [ ] IDEA `README.md` Setup section, `install_wsl.sh`, `jarvis/paths.py`: the operator's primary
+  machine is a Mac, so consider running Jarvis locally here as the dev/fallback deployment and
+  simplifying (or retiring) the WSL/Windows setup steps. The daemon is already portable:
+  `JARVIS_WIN_HOME=$HOME` (or `~/.jarvis/win_home`) resolves the vault root, two launchd agents
+  stand in for the `jarvis@` user units, and only the tray/voice client is Windows-only (text via
+  Slack/Telegram or `/utterance` instead). Direction: a macOS section in the README, an
+  `install_mac.sh` counterpart, and a note that one set of bot tokens must never run on two hosts
+  at once (Telegram polling conflict, Slack Socket Mode event split, vault double-writer).
+- [ ] LOW `Makefile` `tf-validate`/`tf-test`: `init -backend=false` in an S3-initialised
+  `envs/prod` needs live credentials, so `make tf-check` fails offline after any `make plan`.
+  Direction: run the check roots with `TF_DATA_DIR=.terraform-check` (or `-backend=false` in a
+  scratch copy) so validation never touches the real backend.
+- [ ] MEDIUM `infra/RUNBOOK-ops.md`: no recovery procedure for a first boot that ends in
+  `tailscale_key_missing` (bootstrap step c gives up after 30 min; cloud-init ends in error; the
+  box is SSM-reachable but has no tools, agent, or units). Direction: document "fix
+  `jarvis/tailscale` (JSON shape `{\"authkey\": ...}`), then `terraform plan -replace` the
+  instance and apply, then `make clean`"; and have `tailscale-join.sh` log the jq shape error
+  once as `tailscale_key_malformed` instead of a raw jq parse error every 30 s.
+
+
+
 ## From the PR integration review (2026-09-26)
 
 - [ ] LOW `scripts/ssm-run.sh`: also stop polling on the other terminal SSM statuses
@@ -152,10 +179,3 @@ one-line fix direction. Remove an entry when it is done.
 - [ ] LOW `ops/aws/post-boot-assert.sh`: no live check proves `jarvis-work` is rejected when it connects to the box's own Tailscale IP on 8783 (and 8781/8782 for the other mode); the `-o lo` owner triples cover it and `iptables -C` verifies them, so it is a missing test, not a hole. Direction: `runuser -u jarvis-work -- curl http://$ts_ip:8783/healthz`, expect exit 7.
 - [ ] LOW `Makefile` `tf-validate`: `terraform init -backend=false` in `infra/envs/prod` reuses the cached S3 backend in `.terraform/` and fails once the SSO grant has expired. Direction: run validate with a scratch `TF_DATA_DIR` so `make tf-check` never needs credentials.
 - [ ] LOW `ops/aws/post-boot-assert.sh` check 9 (pre-existing): the `jarvis@<mode> not active yet, bind check skipped` branch prints PASS on a skipped precondition. Direction: the same `SKIP-FAIL` counted line used by checks 4b and 12b.
-
-## From the companion token gate (2026-09-27)
-
-- [ ] LOW `infra/DESIGN.md` P8 (`JarvisOperator` "PutValueSecrets" table row): lists only the
-  4 ARNs for `jarvis/{work,personal,shared,tailscale}`, not the later `jarvis/ofw` (AD34, seventh
-  secret). Direction: add the fifth ARN to the P8 row (docs phase); confirm against the actual
-  Terraform policy (`infra/org/policies.tf`) which ARNs `PutValueSecrets` grants today.

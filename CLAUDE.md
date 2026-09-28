@@ -228,6 +228,11 @@ make plan                              # terraform plan -out plan.out for envs/p
   `TF_DATA_DIR` or a validate run without re-init.
 - Hash a bearer token for a `*_SHA256` key from its exact bytes (`printf %s`), never `echo`,
   which hashes a trailing newline and makes the bearer fail closed.
+- After `make plan` has initialised `infra/envs/prod` against the S3 backend, `make tf-check`
+  fails there with "No valid credential sources found" whenever the `jarvis-prod` SSO token is
+  expired: `init -backend=false` on an S3-initialised directory still refreshes credentials.
+  Log in and run it as `AWS_PROFILE=jarvis-prod make tf-check`; without the export it falls
+  through to the `default` profile, whose SSO grant is expired (fix direction in `TODO.md`).
 - `JarvisOperator` cannot `GetSecretValue` on value secrets at all -- only `PutSecretValue`/
   `DescribeSecret` (`infra/org/policies.tf`, statement `PutValueSecrets`); the read grant on
   `secretsmanager:GetSecretValue` belongs to a different permission set (`JarvisClient`), scoped
