@@ -2,6 +2,7 @@
 name: bootstrap-engineer
 description: Builds the instance bootstrap for Jarvis on AWS - cloud-init template, ops/aws systemd units, iptables IMDS rule, Syncthing config, CloudWatch agent config, post-boot assertions. Sonnet.
 model: sonnet
+effort: high
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 

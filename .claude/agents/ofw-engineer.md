@@ -2,6 +2,7 @@
 name: ofw-engineer
 description: Builds ofw-mcp, the OFW MCP server Jarvis personal mode calls - ports the OFW Companion Playwright client into ofw_core, builds the ofw_mcp read and write tools, tokens, limits, breaker, privilege withholding, logging, the selector-session tooling, fixtures and tests. Scope is the ofw-mcp repo only. TDD, Opus.
 model: opus
+effort: high
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 

@@ -2,6 +2,7 @@
 name: docs-writer
 description: Writes the Jarvis AWS runbook and README deploy sections - first-time setup order, secret population, OAuth login, Syncthing pairing, key and token rotation, snapshot restore, teardown, acceptance checklist. Sonnet.
 model: sonnet
+effort: medium
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 

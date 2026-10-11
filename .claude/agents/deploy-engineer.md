@@ -2,6 +2,7 @@
 name: deploy-engineer
 description: Builds Jarvis deploy tooling - Makefile, release packaging, real SSM document scripts with rollback, oauth-login.sh, sync-agents, status, and the Windows client changes for two Tailscale endpoints with Secrets Manager tokens. Sonnet.
 model: sonnet
+effort: high
 tools: Read, Write, Edit, Grep, Glob, Bash, mcp__plugin_ecc_context7__resolve-library-id, mcp__plugin_ecc_context7__query-docs
 ---
 

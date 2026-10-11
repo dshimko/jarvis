@@ -2,6 +2,7 @@
 name: security-reviewer
 description: Adversarial security and correctness gate for each Jarvis AWS migration phase. Runs tflint and trivy, reviews every IAM line, checks brief rules 0.1 to 0.5, tries to refute its own findings, and returns severity-ranked confirmed findings. Opus.
 model: opus
+effort: xhigh
 tools: Read, Grep, Glob, Bash
 ---
 

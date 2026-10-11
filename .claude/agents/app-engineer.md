@@ -2,6 +2,7 @@
 name: app-engineer
 description: Implements the Jarvis app changes for AWS - per-mode daemon, config profiles, Tailscale bind, tokens, structured logging with content filter, Syncthing conflict gate, OFW Gmail watcher, secrets check. TDD, Opus.
 model: opus
+effort: high
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 

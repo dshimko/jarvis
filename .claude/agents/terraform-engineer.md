@@ -2,6 +2,7 @@
 name: terraform-engineer
 description: Builds the Terraform under infra/ for the Jarvis AWS migration - bootstrap, modules, envs/prod, org, policy tests, make tf-check. Never applies. Opus.
 model: opus
+effort: xhigh
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 

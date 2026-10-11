@@ -2,6 +2,7 @@
 name: infra-architect
 description: Writes infra/DESIGN.md for the Jarvis AWS migration - resource list, full IAM policies, monthly cost estimate, threat model. Design only, no code. Opus.
 model: opus
+effort: xhigh
 tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, WebFetch
 ---
 
