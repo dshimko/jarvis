@@ -3,20 +3,10 @@
 Read `README.md` for what Jarvis is and the isolation guarantees, `PORTING.md` for the Windows
 port history, and `infra/PLAN.md` for the AWS migration plan and its fixed decisions.
 
-## Model dispatch (mandatory)
+## Agents and gates
 
-- **Fable plans only.** When the session model is Fable it writes plans, agent definitions, gate
-  decisions, and the final report. It writes no application code, Terraform, scripts, or docs.
-- **Opus builds the hard parts and reviews**: design (`infra-architect`), Terraform and IAM
-  (`terraform-engineer`), core app changes (`app-engineer`), every gate (`security-reviewer`).
-- **Sonnet builds the rest**: bootstrap scripts and units (`bootstrap-engineer`), deploy tooling
-  and the Windows client (`deploy-engineer`), docs (`docs-writer`), workspace preparation.
-- The agent definitions in `.claude/agents/` pin their model. When calling a plugin agent (for
-  example `ecc:code-reviewer`), pass an explicit `model` override; never rely on `inherit`.
-- Never use `subagent_type: fork` from a Fable session: forks run on the parent model.
-- Files added to `.claude/agents/` register as agent types only at session start. In the same
-  session, dispatch with `subagent_type: general-purpose`, the matching `model`, and a first line
-  telling the agent to read and follow its role file.
+- Model dispatch follows the global operating mode (`~/.claude/rules/common/operating-mode.md`).
+  The project agents in `.claude/agents/` pin their model; use them for their areas.
 - If a hook or permission prompt blocks a command, stop and report it. Never reach the same
   effect another way (a different tool, a scripting language, a copied binary). A blocked action
   is a question for the human, not an obstacle.
